@@ -47,6 +47,8 @@ type helperResponse struct {
 	Error     string `json:"error,omitempty"`
 	TakenOver bool   `json:"takenOver"`
 	Detail    string `json:"detail,omitempty"`
+	// Exe 是助手进程自己的可执行文件路径：面板据此判断任务是不是还指着搬走前的旧路径
+	Exe string `json:"exe,omitempty"`
 }
 
 func helperSIDPath() string {
@@ -181,6 +183,9 @@ func handleHelperRequest(req helperRequest) helperResponse {
 	case "ping":
 		resp.OK = true
 		resp.Detail = "helper alive"
+		if exe, err := os.Executable(); err == nil {
+			resp.Exe = exe
+		}
 	case "status":
 		resp.OK = true
 		adapters := ListAdapters()
@@ -315,6 +320,30 @@ func helperCall(action string, timeout time.Duration) (helperResponse, error) {
 func HelperRunning() bool {
 	_, err := helperCall("ping", 700*time.Millisecond)
 	return err == nil
+}
+
+// helperRunningExe 问常驻助手它自己是从哪个 exe 起来的。
+// 拿不到（没在跑 / 老版本助手不返回该字段）就返回空串。
+func helperRunningExe() string {
+	resp, err := helperCall("ping", 700*time.Millisecond)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(resp.Exe)
+}
+
+// HelperStalePath 现在的面板换了路径，但后台助手任务还指着旧 exe。
+// 判断依据是助手自报的路径：只要它在跑，就能拿到准确答案，不需要读任务 XML（那要管理员权限）。
+func HelperStalePath() bool {
+	helperExe := helperRunningExe()
+	if helperExe == "" {
+		return false
+	}
+	me, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return !strings.EqualFold(filepath.Clean(me), filepath.Clean(helperExe))
 }
 
 // takeoverSystemDNS 优先自己干（面板已提权时），否则交给常驻的 SYSTEM 助手——两种路径对调用方无差别

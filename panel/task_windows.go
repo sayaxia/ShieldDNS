@@ -134,6 +134,26 @@ func HelperTaskRegistered() bool {
 	return taskExists(helperTaskName)
 }
 
+// stopHelperProcesses 强杀 SYSTEM 会话里残留的 ShieldDNS 进程（正常就是后台助手）。
+// 为什么不只靠 schtasks /End：任务实例显示已结束时，真正的助手进程仍可能活着并占着命名管道，
+// 此时 /Create /F 写进去的新定义（比如换了程序路径）根本拉不起来，用户看到的就是"重启没用"。
+func stopHelperProcesses() {
+	_, _ = runHidden(sysExe("taskkill.exe"), "/F",
+		"/FI", "IMAGENAME eq ShieldDNS.exe", "/FI", "SESSION eq 0")
+}
+
+// waitHelperStopped 等命名管道彻底断开（最多 timeout），返回是否成功停下
+func waitHelperStopped(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !HelperRunning() {
+			return true
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return !HelperRunning()
+}
+
 // RegisterHelperTask 注册并立刻拉起后台助手。需要管理员（只在这一步弹一次 UAC）。
 func RegisterHelperTask() error {
 	if !IsAdmin() {
@@ -156,6 +176,13 @@ func RegisterHelperTask() error {
 	// 已有实例在跑时先停掉，否则 /Create /F 覆盖不了正在运行的任务，
 	// 旧定义（没有登录触发/重复）也就不会被更新。
 	_, _ = runHidden(sysExe("schtasks.exe"), "/End", "/TN", helperTaskName)
+	if !waitHelperStopped(1500 * time.Millisecond) {
+		// 任务实例停了但进程还在：杀掉它，否则新定义连不上管道
+		stopHelperProcesses()
+		if !waitHelperStopped(3 * time.Second) {
+			return errors.New("旧的后台助手进程停不下来，请点「卸载」后再点「安装」")
+		}
+	}
 	if err := createTaskFromXML(helperTaskName, helperTaskXML(exe, DataDir(), "S-1-5-18")); err != nil {
 		return err
 	}
@@ -184,6 +211,11 @@ func UnregisterHelperTask() error {
 	}
 	_, err := runHidden(sysExe("schtasks.exe"), "/End", "/TN", helperTaskName)
 	_ = err // 没在跑时 /End 会报错，忽略
+	if !waitHelperStopped(1500 * time.Millisecond) {
+		// 任务删了但进程还在：它会继续占着管道对外服务，看起来像"卸载没生效"
+		stopHelperProcesses()
+		waitHelperStopped(3 * time.Second)
+	}
 	if _, err := runHidden(sysExe("schtasks.exe"), "/Delete", "/TN", helperTaskName, "/F"); err != nil && HelperTaskRegistered() {
 		return err
 	}

@@ -146,6 +146,30 @@ func main() {
 		}
 	}()
 
+	// 换了程序路径之后的自愈：开机自启项里存的还是旧路径时直接重写（写 HKCU，不需要管理员）；
+	// 后台助手任务还指着旧 exe 时，有管理员权限就顺手重注册一次，否则只记日志、由界面提示。
+	go func() {
+		if AutoStartEnabled() {
+			if err := SetAutoStart(true); err != nil {
+				panelLog("开机自启项刷新失败：%v", err)
+			}
+		}
+		time.Sleep(2 * time.Second)
+		if !HelperStalePath() {
+			return
+		}
+		if !IsAdmin() {
+			panelLog("后台助手任务仍指向旧路径，当前权限无法自动重注册：请以管理员身份重启后点『重启』")
+			return
+		}
+		panelLog("后台助手任务指向旧路径，按当前路径重新注册")
+		if err := RegisterHelperTask(); err != nil {
+			panelLog("自动重注册后台助手失败：%v", err)
+			return
+		}
+		panelLog("后台助手已切到当前路径并重启")
+	}()
+
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
 	win, err := NewWindow(url, 1)
 	if err != nil {

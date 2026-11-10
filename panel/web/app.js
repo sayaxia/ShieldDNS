@@ -475,16 +475,19 @@ function renderInfo(info, st) {
 
   const helperOn = !!info.helperInstalled;
   const helperUp = !!info.helperRunning;
+  const helperStale = !!info.helperStale;
   const helperBadge = $("helperBadge");
-  helperBadge.textContent = helperUp ? "运行中" : helperOn ? "已安装·未运行" : "未安装";
-  helperBadge.className = `badge ${helperUp ? "ok" : helperOn ? "warn" : ""}`;
+  helperBadge.textContent = helperStale ? "路径已变" : helperUp ? "运行中" : helperOn ? "已安装·未运行" : "未安装";
+  helperBadge.className = `badge ${helperStale ? "warn" : helperUp ? "ok" : helperOn ? "warn" : ""}`;
   setText(
     "kvHelper",
-    helperUp
-      ? "常驻 SYSTEM 身份，负责接管/还原系统 DNS，并在核心掉线时自动还原，全程免 UAC。"
-      : helperOn
-        ? "任务已安装，助手进程当前没在跑：登录时与每 30 分钟会自动拉起；想立刻恢复可点「以管理员身份重启」后再点「重启」，不需要重新安装。"
-        : "未安装：开启防护时的 DNS 接管需要一次 UAC 提权；安装后长期免弹。"
+    helperStale
+      ? "程序换了路径，后台助手还在跑旧位置的那份：点「重启」（需管理员）会按当前路径重新注册，不用卸载重装。"
+      : helperUp
+        ? "常驻 SYSTEM 身份，负责接管/还原系统 DNS，并在核心掉线时自动还原，全程免 UAC。"
+        : helperOn
+          ? "任务已安装，助手进程当前没在跑：登录时与每 30 分钟会自动拉起；想立刻恢复可点「以管理员身份重启」后再点「重启」，不需要重新安装。"
+          : "未安装：开启防护时的 DNS 接管需要一次 UAC 提权；安装后长期免弹。"
   );
   // 装过就只留「重启 / 卸载」，没装才显示「安装」，避免三个按钮并排挤成一团
   $("btnHelperOn").style.display = helperOn ? "none" : "";

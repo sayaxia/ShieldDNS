@@ -235,6 +235,7 @@ func (a *App) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"autoStartEnabled":   AutoStartEnabled(),
 		"helperInstalled":    HelperTaskRegistered(),
 		"helperRunning":      HelperRunning(),
+		"helperStale":        HelperStalePath(),
 	}
 	writeJSON(w, 200, info)
 }
