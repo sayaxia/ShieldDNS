@@ -191,7 +191,9 @@ func UnregisterGuardTask() error {
 	return nil
 }
 
-// helperTaskXML 后台助手任务：开机即起，常驻，执行时限设为无限，靠命名管道对外提供服务。
+// helperTaskXML 后台助手任务：开机与登录时拉起，常驻，执行时限设为无限，靠命名管道对外提供服务。
+// 登录触发上挂 30 分钟重复：助手被杀死 / 异常退出后任务回到 Ready，下一轮重复会把它重新拉起，
+// 普通权限用户不必再为了"重启助手"去提权（多个客户端先后启动时也不会因为助手已停而卡住）。
 func helperTaskXML(exe, dataDir, userId string) string {
 	upper := "<UserId>" + userId + "</UserId>"
 	return `<?xml version="1.0" encoding="UTF-16"?>
@@ -205,6 +207,14 @@ func helperTaskXML(exe, dataDir, userId string) string {
       <Enabled>true</Enabled>
       <Delay>PT5S</Delay>
     </BootTrigger>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <Delay>PT8S</Delay>
+      <Repetition>
+        <Interval>PT30M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </LogonTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
@@ -263,6 +273,9 @@ func RegisterHelperTask() error {
 	if err != nil {
 		return err
 	}
+	// 已有实例在跑时先停掉，否则 /Create /F 覆盖不了正在运行的任务，
+	// 旧定义（没有登录触发/重复）也就不会被更新。
+	_, _ = runHidden(sysExe("schtasks.exe"), "/End", "/TN", helperTaskName)
 	if err := createTaskFromXML(helperTaskName, helperTaskXML(exe, DataDir(), "S-1-5-18")); err != nil {
 		return err
 	}

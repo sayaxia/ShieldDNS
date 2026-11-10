@@ -81,6 +81,44 @@ func helperLog(format string, args ...any) {
 	fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
 }
 
+// panelLog 面板自身的日志（启动自愈、助手拉起结果），与助手日志分开便于排查
+func panelLog(format string, args ...any) {
+	dir := filepath.Join(DataDir(), "logs")
+	_ = os.MkdirAll(dir, 0o755)
+	f, err := os.OpenFile(filepath.Join(dir, "panel.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
+}
+
+// ensureHelperAlive 面板启动时的一次自愈尝试：
+// 任务装了但管道连不上 → 有管理员权限就先自己拉一把；
+// 提不了权就记一条日志，交给助手任务的登录触发 / 30 分钟重复去恢复（不需要用户重装）。
+func ensureHelperAlive() {
+	if !HelperTaskRegistered() || HelperRunning() {
+		return
+	}
+	if !IsAdmin() {
+		panelLog("助手任务已安装但管道连不上：当前无管理员权限，等待登录触发或 30 分钟自动拉起")
+		return
+	}
+	if err := RunHelperTask(); err != nil {
+		panelLog("尝试拉起后台助手失败: %v", err)
+		return
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if HelperRunning() {
+			panelLog("后台助手已由面板拉起并连上管道")
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	panelLog("已触发助手任务，但 3 秒内管道仍未连通")
+}
+
 // createPipe 建一个只允许 SYSTEM / Administrators / 指定用户连接的管道实例
 func createPipe(sid string) (windows.Handle, error) {
 	name, err := windows.UTF16PtrFromString(helperPipeName)

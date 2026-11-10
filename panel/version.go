@@ -2,7 +2,7 @@ package main
 
 // 面板版本号：唯一来源，界面、/system/info、更新检查都以它为准。
 // 发版时只改这一处，同时把 tag 打成 v<同值>。
-const appVersion = "0.1.0"
+const appVersion = "0.1.1"
 
 // GitHub 仓库（Release 资产从这里取）
 const githubRepo = "sayaxia/ShieldDNS"

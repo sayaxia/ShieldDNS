@@ -610,11 +610,15 @@ func (a *App) handleHelper(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "start":
-		if err := RunHelperTask(); err != nil {
+		if !IsAdmin() {
+			writeJSON(w, 403, map[string]string{"error": "启动后台助手需要管理员权限：点「以管理员身份重启」后再点「重启」即可；平时登录与每 30 分钟会自动拉起，通常无需手动重启"})
+			return
+		}
+		// 用注册（而不是单纯 /Run）来重启：顺带把任务定义升级成带登录触发 + 30 分钟重复的新版本
+		if err := RegisterHelperTask(); err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
-		time.Sleep(1200 * time.Millisecond)
 	default:
 		writeJSON(w, 400, map[string]string{"error": "不支持的操作"})
 		return

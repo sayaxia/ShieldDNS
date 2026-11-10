@@ -68,6 +68,8 @@ func main() {
 
 	cfg := loadConfig()
 	startupSelfCheck(cfg)
+	// 助手装了但没在跑（被杀 / 上次异常退出）就先自己拉一把；拉不动则等登录触发兜底。
+	ensureHelperAlive()
 	// 应用启动时保持"待命"状态：不自动开启防护，也不主动接管系统 DNS。
 	// 若上次是接管状态（网卡还指向 127.0.0.1），先把 DNS 还原，避免"程序开着但没防护"时全机解析挂在回环上。
 	if cfg.ProtectionEnabled {
