@@ -190,6 +190,17 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 
 改了 `app.rc` 或 `panel\assets\*.ico` 之后必须重新生成 `app.syso`，否则图标还是旧资源。
 
+### vendor 里的两处手改（会被 `go mod vendor` 覆盖）
+
+WebView2 的两个行为在原库上做不到，因此直接改了 `panel\vendor\` 下的文件。重新 vendor 之后必须手动补回，否则启动会退化成"先露白窗口 / 首帧不画"：
+
+| 文件 | 改动 | 作用 |
+| --- | --- | --- |
+| `vendor\github.com\jchv\go-webview2\webview.go` | `WindowOptions` 增加 `Hidden bool`；为 true 时跳过 `ShowWindow` / `UpdateWindow` / `SetFocus` | 建窗时不显示，避免先露出一块白底客户区 |
+| `vendor\github.com\jchv\go-webview2\pkg\edge\chromium.go` | `CreateCoreWebView2ControllerCompleted` 里 `PutIsVisible(true)` + `PutDefaultBackgroundColor(11,15,13)` | 隐藏建出来的控件不会自己变可见、默认背景是白色，不补这两句页面一直不画 |
+
+记忆点：**跳过 ShowWindow 只是"看不见"，不等于"会画"**。控件必须显式置为可见、默认背景改成面板底色，页面才会在隐藏窗口里正常渲染。
+
 ---
 
 ## 6. 运行
@@ -229,7 +240,7 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 ### 版本号与检查更新
 
 * 版本号只有一个来源：`panel/version.go` 里的 `appVersion`（当前 `0.1.0`）。界面右上角 chip、设置页「版本」行、`/system/info` 都读它；核心侧 `Cargo.toml` 的版本同步即可。
-* 「检查更新」走 `GET /system/update`：请求 `https://api.github.com/repos/sayaxia/ShieldDNS/releases/latest`，比对 tag（如 `v0.1.1`）与本地版本，按数字分段比较（`0.1.0` vs `0.1.1`、`0.10.0` 都能正确排序）。
+* 「检查更新」走 `GET /system/update`：请求 `https://api.github.com/repos/sayaxia/ShieldDNS/releases/latest`，比对 tag（如 `v0.1.2`）与本地版本，按数字分段比较（`0.1.1` vs `0.1.2`、`0.10.0` 都能正确排序）。
 * 结果里带 `releaseURL`、`downloadURL`（优先 `*win-x64*.zip` 资产）与资产体积；有新版时界面把「前往下载」按钮放出来，点它由面板后端用系统默认浏览器打开 Release 页（`POST /system/openrelease`，只放行本仓库链接）。
 * **不做自替换**：exe 正在运行，自己覆盖自己必然失败；先退出程序再解压新包是更稳的做法，也避免半截更新把程序搞坏。
 * 结果缓存 10 分钟（`?force=1` 跳过），界面启动时静默查一次，只把结论写进设置页，不弹 toast。
@@ -312,7 +323,11 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 * 备份文件被清理 → 无备份可还原，守护保持不动（不会瞎改 DNS），需要手动改回自动获取。
 * 助手没装（或没在跑）→ 没有守护；此时异常退出只能手动还原，或重新启动面板让核心把解析接回来。
 
-> 兼容说明：`<exe> -watchdog -data "<数据目录>"` 入口和 `ShieldDNS-DNS-Guard` 任务的代码仍然保留（老用户机器上已注册的任务继续可用，`logs\watchdog.log` 仍会记录），但产品里不再提示安装、也不再自动注册。
+> 兼容说明：`<exe> -watchdog -data "<数据目录>"` 这个入口还在（老机器上已注册的 `ShieldDNS-DNS-Guard` 任务继续可用，`logs\watchdog.log` 仍会记录），但注册/注销/手动触发的代码与 `/system/guard` 接口已经删除，产品里也不再提示安装。想把老任务彻底去掉，管理员执行：
+>
+> ```powershell
+> schtasks /Delete /TN "ShieldDNS-DNS-Guard" /F
+> ```
 
 **启动自检**：面板启动时若发现「仍有接管记录 + 当前无应答」，只写日志不擅自动网卡（因为紧接着核心就会启动并重新接管，此时还原反而造成抖动）。
 
@@ -447,9 +462,7 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 | GET | `/system/info` | 管理员状态、网卡列表、端口、核心是否运行、WebView 是否可用 |
 | POST | `/system/protection` | 开关保护并同步托盘图标 |
 | POST | `/system/settings` | 保存端口 / 上游 / 拦截模式（`dns_mode` 由端口推导，必要时重启核心、接管或还原） |
-| POST | `/system/takeover`、`/system/release` | 手动接管 / 还原系统 DNS（界面已不再调用，正常流程由开/关防护触发） |
 | POST | `/system/upstreams` | `{"action":"capture"}` 重新读取本机 DNS 作为上游 |
-| GET/POST | `/system/guard` | 老接口：查询/注册/注销/手动触发看门狗任务（界面已移除，守护职责并入后台助手） |
 | GET/POST | `/system/helper` | 后台助手：GET 返回 `{installed,running,admin}`；POST `{"action":"register"|"unregister"|"start"}`（注册/卸载需管理员，一步一次 UAC） |
 | POST | `/system/autostart` | `{"enabled":bool}` 设置开机自启（写 `HKCU\...\Run`，无需管理员） |
 | GET | `/system/update` | 检查 GitHub Releases 最新版本（`?force=1` 跳过 10 分钟缓存），返回 `{ok,current,latest,hasUpdate,releaseURL,downloadURL,error}` |
@@ -525,6 +538,26 @@ python scripts\verify_core.py 53 5399
 ---
 
 ## 16. 版本记录
+
+### 0.1.2
+
+**窗口与界面**
+
+* 窗口锁 960:720 宽高比，随系统 DPI 自适应（175% 缩放下建窗即按物理像素算），最小逻辑宽 790；拖拽缩放时比例由 `WM_SIZING` / `WM_GETMINMAXINFO` / `WM_EXITSIZEMOVE` 三段约束。
+* 窗口变小时内容整页等比缩放（`documentElement.style.zoom`，clamp 0.7–2.4），不再依赖 CSS 断点把卡片挤成两三列。常规尺寸 960×720。
+* 概览 hero 卡去重：去掉「保护已暂停」pill 与时间戳，监听地址 / 规则数 / 拦截率一行上移到标题上方；右列「开关 + 状态」并排，下面是「更新全部订阅」与订阅更新时间（取 `filters[].last_update` 的最大值，不是轮询时间）。
+* 设置页精简：未勾选自定义上游时，上游卡不再列出那串 IP，只留「读取于 HH:MM」与「重新读取本机 DNS」。
+* 底部说明改为「无内置规则，规则需自行添加」。
+
+**启动体验**
+
+* 建窗不显示，等页面首帧信号（`/panel/ready`）到了再显示窗口，2 秒超时兜底——启动不再先露一个无内容的白窗口。
+* 隐藏建窗有两个必须补的前提：控制器要显式 `PutIsVisible(true)`、默认背景底色要改成面板深色，否则页面一直不画、显示出来仍是白的；首帧打点也不能只靠 `requestAnimationFrame`（隐藏窗口不回调），补 `setTimeout` 兜底。
+* 进程第一次 `ShowWindow` 会被 STARTUPINFO 覆盖（父进程用最小化/隐藏方式拉起时窗口直接变最小化，看着像启动即退出）→ 连续两次 `SW_SHOWNORMAL` + `IsIconic → SW_RESTORE` 兜底。
+
+**清理**
+
+* 删除前端已不再使用的 `/system/guard`、`/system/takeover`、`/system/release` 接口，以及看门狗任务的注册 / 注销 / 手动触发代码；`-watchdog` 入口保留，老机器上已注册的 `ShieldDNS-DNS-Guard` 任务继续可用（要清掉见第 7 节的命令）。
 
 ### 0.1.0（首个公开版本）
 

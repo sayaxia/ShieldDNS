@@ -165,14 +165,11 @@ func (a *App) newMux() http.Handler {
 	mux.HandleFunc("/system/protection", a.handleProtection)
 	mux.HandleFunc("/system/settings", a.handleSettings)
 	mux.HandleFunc("/system/upstreams", a.handleUpstreams)
-	mux.HandleFunc("/system/guard", a.handleGuard)
 	mux.HandleFunc("/system/helper", a.handleHelper)
 	mux.HandleFunc("/system/autostart", a.handleAutoStart)
 	mux.HandleFunc("/system/port", a.handlePort)
 	mux.HandleFunc("/system/update", a.handleUpdate)
 	mux.HandleFunc("/system/openrelease", a.handleOpenRelease)
-	mux.HandleFunc("/system/takeover", a.handleTakeover)
-	mux.HandleFunc("/system/release", a.handleRelease)
 	mux.HandleFunc("/system/elevate", a.handleElevate)
 	mux.HandleFunc("/system/restart", a.handleRestart)
 	mux.HandleFunc("/system/quit", a.handleQuit)
@@ -235,7 +232,6 @@ func (a *App) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"customUpstreams":    cfg.CustomUpstreams,
 		"upstreamSource":     cfg.UpstreamSource,
 		"upstreamCapturedAt": cfg.UpstreamCapturedAt,
-		"guardTask":          GuardTaskRegistered(),
 		"autoStartEnabled":   AutoStartEnabled(),
 		"helperInstalled":    HelperTaskRegistered(),
 		"helperRunning":      HelperRunning(),
@@ -528,62 +524,6 @@ func (a *App) handleUpstreams(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *App) handleTakeover(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, 405, map[string]string{"error": "仅支持 POST"})
-		return
-	}
-	cfg := loadConfig()
-	if cfg.ListenPort != 53 {
-		writeJSON(w, 400, map[string]string{"error": "核心当前监听端口不是 53，无法接管系统 DNS"})
-		return
-	}
-	if IsTakenOver() {
-		writeJSON(w, 200, map[string]any{"ok": true, "message": "已经是接管状态，无需重复接管"})
-		return
-	}
-	// 接管前先把本机 DNS 抓成上游：此后系统 DNS 会被改成 127.0.0.1
-	upstreamSource := ""
-	if cfg.UpstreamMode == "system" {
-		old := strings.Join(cfg.Upstreams, ",")
-		list, src, err := applySystemUpstreams(cfg)
-		if err != nil {
-			writeJSON(w, 500, map[string]string{"error": "读取本机 DNS 失败：" + err.Error()})
-			return
-		}
-		cfg.Upstreams = list
-		upstreamSource = src
-		if err := saveConfig(cfg); err != nil {
-			writeJSON(w, 500, map[string]string{"error": "保存配置失败：" + err.Error()})
-			return
-		}
-		if strings.Join(list, ",") != old {
-			if err := a.core.Restart(); err != nil {
-				writeJSON(w, 500, map[string]string{"error": "应用新上游失败：" + err.Error()})
-				return
-			}
-			a.reloadConfig()
-		}
-	}
-	if err := takeoverSystemDNS(); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true, "upstreams": cfg.Upstreams, "upstreamSource": upstreamSource})
-}
-
-func (a *App) handleRelease(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, 405, map[string]string{"error": "仅支持 POST"})
-		return
-	}
-	if err := releaseSystemDNS(); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true})
-}
-
 func (a *App) handleHelper(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		writeJSON(w, 200, map[string]any{
@@ -630,45 +570,6 @@ func (a *App) handleHelper(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "installed": HelperTaskRegistered(), "running": HelperRunning()})
-}
-
-func (a *App) handleGuard(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		writeJSON(w, 200, map[string]any{"installed": GuardTaskRegistered(), "admin": IsAdmin()})
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSON(w, 405, map[string]string{"error": "仅支持 GET / POST"})
-		return
-	}
-	var req struct {
-		Action string `json:"action"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]string{"error": "参数错误"})
-		return
-	}
-	switch req.Action {
-	case "register":
-		if err := RegisterGuardTask(); err != nil {
-			writeJSON(w, 500, map[string]string{"error": err.Error()})
-			return
-		}
-	case "unregister":
-		if err := UnregisterGuardTask(); err != nil {
-			writeJSON(w, 500, map[string]string{"error": err.Error()})
-			return
-		}
-	case "run":
-		if err := RunGuardTask(); err != nil {
-			writeJSON(w, 500, map[string]string{"error": err.Error()})
-			return
-		}
-	default:
-		writeJSON(w, 400, map[string]string{"error": "不支持的操作"})
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true, "installed": GuardTaskRegistered()})
 }
 
 func (a *App) handleAutoStart(w http.ResponseWriter, r *http.Request) {
