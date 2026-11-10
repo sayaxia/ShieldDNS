@@ -36,7 +36,7 @@ Windows 本地 DNS 广告拦截应用。**Rust 写 DNS 防护核心**，**Go 写
 | 保护开关 | 一键暂停/恢复，托盘图标同步切换闪电 ↔ 暂停 |
 | DNS 接管 | 监听 53 时开启防护即自动把各网卡 DNS 指向 127.0.0.1，关防护/退出自动还原；非 53 端口不接管 |
 | 托盘常驻 | 关闭窗口只收进托盘，程序继续守护核心 |
-| 版本与更新 | 右上角与设置页显示当前版本；「检查更新」查询 GitHub Releases 的最新 tag，有新版本时给出体积与「前往下载」按钮（不自动替换正在运行的 exe） |
+| 版本与更新 | 右上角与设置页显示当前版本；「检查更新」查询 GitHub Releases 的最新 tag，有新版时可点「立即更新」由程序自己下载并替换文件后重启，也可点「发布页」手动下载 |
 
 **发行版不内置任何第三方规则订阅**：程序只提供引擎与订阅管理（URL 添加、定时更新、条数统计），用哪份规则由使用者自己决定。首次安装后规则数为 0，到「过滤订阅 → 添加订阅」填一个自己信任的 AdGuard 语法规则源即可。
 
@@ -241,8 +241,13 @@ WebView2 的两个行为在原库上做不到，因此直接改了 `panel\vendor
 
 * 版本号只有一个来源：`panel/version.go` 里的 `appVersion`（当前 `0.1.0`）。界面右上角 chip、设置页「版本」行、`/system/info` 都读它；核心侧 `Cargo.toml` 的版本同步即可。
 * 「检查更新」走 `GET /system/update`：请求 `https://api.github.com/repos/sayaxia/ShieldDNS/releases/latest`，比对 tag（如 `v0.1.2`）与本地版本，按数字分段比较（`0.1.1` vs `0.1.2`、`0.10.0` 都能正确排序）。
-* 结果里带 `releaseURL`、`downloadURL`（优先 `*win-x64*.zip` 资产）与资产体积；有新版时界面把「前往下载」按钮放出来，点它由面板后端用系统默认浏览器打开 Release 页（`POST /system/openrelease`，只放行本仓库链接）。
-* **不做自替换**：exe 正在运行，自己覆盖自己必然失败；先退出程序再解压新包是更稳的做法，也避免半截更新把程序搞坏。
+* 结果里带 `releaseURL`、`downloadURL`（优先 `*win-x64*.zip` 资产）与资产体积；有新版时界面放出「立即更新」和「发布页」两个按钮。
+* **应用内自动更新**：`POST /system/update/apply` 让面板自己下载 Release 压缩包、解压校验后替换 `ShieldDNS.exe` 与 `core\shielddns-core.exe`，然后拉起新实例并退出当前进程，用户不用去浏览器下载解压。
+  * 替换用的是「旧文件改名 → 写新文件 → 失败回滚」：Windows 不允许覆盖正在运行的 exe，但允许给它改名（改名后的旧镜像留在 `.old` 里，下次启动时删）。
+  * 更新前先停核心，避免核心 exe 被占用；更新后程序按既有逻辑重启，防护回到待命状态，需要手动再开。
+  * 进度通过 `GET /system/update/status`（`{running,stage,percent,message,version,error,done}`）给界面轮询；下载先写 `.part`，长度对不上就当失败重下，不会留下半截包。
+  * 解压做了 zip-slip 过滤，并且要求包里确实有体积合理的 `ShieldDNS.exe` 和 `core\shielddns-core.exe`，否则不动现有文件。
+  * 装在没有写入权限的目录（如 `Program Files`）时会失败并提示先「以管理员身份重启」；「发布页」按钮仍保留，用作手动兜底。
 * 结果缓存 10 分钟（`?force=1` 跳过），界面启动时静默查一次，只把结论写进设置页，不弹 toast。
 
 ---
@@ -466,6 +471,8 @@ WebView2 的两个行为在原库上做不到，因此直接改了 `panel\vendor
 | GET/POST | `/system/helper` | 后台助手：GET 返回 `{installed,running,admin}`；POST `{"action":"register"|"unregister"|"start"}`（注册/卸载需管理员，一步一次 UAC） |
 | POST | `/system/autostart` | `{"enabled":bool}` 设置开机自启（写 `HKCU\...\Run`，无需管理员） |
 | GET | `/system/update` | 检查 GitHub Releases 最新版本（`?force=1` 跳过 10 分钟缓存），返回 `{ok,current,latest,hasUpdate,releaseURL,downloadURL,error}` |
+| POST | `/system/update/apply` | 应用内自动更新：下载并替换程序文件后自动重启（进行中再次调用返回 409） |
+| GET | `/system/update/status` | 更新进度 `{running,stage,percent,message,version,error,done}`，供界面轮询 |
 | POST | `/system/openrelease` | `{"url":"https://github.com/sayaxia/ShieldDNS/..."}` 用系统默认浏览器打开下载页（只放行本仓库链接） |
 | POST | `/system/elevate` | UAC 提权重启面板 |
 | POST | `/system/restart`、`/system/quit` | 重启 / 退出 |

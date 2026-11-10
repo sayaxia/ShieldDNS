@@ -555,13 +555,14 @@ async function killPortOwner() {
   }
 }
 
-// 检查更新：只查 GitHub Release，不自动替换正在运行的 exe
+ // 检查更新：查 GitHub Release；有新版可以直接在应用内替换文件并重启
 async function checkUpdate(force, quiet) {
   const notify = quiet ? () => {} : toast;
   const btn = $("btnCheckUpdate");
   const note = $("updateNote");
   const text = $("updateText");
   const openBtn = $("btnOpenRelease");
+  const applyBtn = $("btnApplyUpdate");
   if (btn) {
     btn.disabled = true;
     btn.textContent = "检查中…";
@@ -570,6 +571,7 @@ async function checkUpdate(force, quiet) {
     const res = await api(`/system/update${force ? "?force=1" : ""}`);
     note.classList.remove("hidden");
     openBtn.classList.add("hidden");
+    if (applyBtn) applyBtn.classList.add("hidden");
     if (!res.ok) {
       state.update = res;
       text.textContent = `检查失败：${res.error || "未知错误"}（已将版本 v${res.current}）`;
@@ -581,9 +583,11 @@ async function checkUpdate(force, quiet) {
       const size = res.downloadSize ? ` · ${(res.downloadSize / 1048576).toFixed(1)} MB` : "";
       text.textContent = `发现新版本 v${res.latest}（当前 v${res.current}）${size}`;
       openBtn.classList.remove("hidden");
+      if ($("btnApplyUpdate")) $("btnApplyUpdate").classList.remove("hidden");
       notify(`发现新版本 v${res.latest}`);
     } else {
       text.textContent = `已是最新版本 v${res.current}（GitHub 最新 Release：v${res.latest}）`;
+      if ($("btnApplyUpdate")) $("btnApplyUpdate").classList.add("hidden");
       notify("已是最新版本");
     }
   } catch (e) {
@@ -604,6 +608,51 @@ function openReleasePage() {
   api("/system/openrelease", { method: "POST", body: { url } })
     .then(() => toast("已在浏览器打开下载页"))
     .catch((e) => toast(e.message, "err"));
+}
+
+// 应用内更新：后端下载并替换文件，随后自己重启；这里只负责展示进度
+async function applyUpdate() {
+  const applyBtn = $("btnApplyUpdate");
+  const openBtn = $("btnOpenRelease");
+  const text = $("updateText");
+  if (!state.update || !state.update.hasUpdate) return;
+  if (!confirm(`要更新到 v${state.update.latest} 吗？更新后程序会自动重启，防护会回到待命状态，需要手动再开。`)) return;
+  if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = "更新中…"; }
+  if (openBtn) openBtn.classList.add("hidden");
+  try {
+    await api("/system/update/apply", { method: "POST", body: {} });
+  } catch (e) {
+    text.textContent = `更新失败：${e.message}`;
+    toast(e.message, "err");
+    if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = "立即更新"; }
+    return;
+  }
+  // 轮询进度；进程重启后请求会失败，这属于正常收尾
+  let stopped = false;
+  const timer = setInterval(async () => {
+    if (stopped) return;
+    try {
+      const st = await api("/system/update/status");
+      if (st.error) {
+        stopped = true;
+        clearInterval(timer);
+        text.textContent = `更新失败：${st.error}`;
+        toast(st.error, "err");
+        if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = "立即更新"; }
+        return;
+      }
+      if (st.message) text.textContent = st.message;
+      if (st.done) {
+        stopped = true;
+        clearInterval(timer);
+        text.textContent = "更新完成，程序正在重启…";
+      }
+    } catch (e) {
+      stopped = true;
+      clearInterval(timer);
+      text.textContent = "更新完成，程序正在重启…";
+    }
+  }, 700);
 }
 
 async function saveSettings() {  let port = parseInt($("setPort").value, 10);
@@ -759,6 +808,7 @@ function bind() {
   $("btnRestartCore").addEventListener("click", restartCore);
   if ($("btnCheckUpdate")) $("btnCheckUpdate").addEventListener("click", () => checkUpdate(true));
   if ($("btnOpenRelease")) $("btnOpenRelease").addEventListener("click", openReleasePage);
+  if ($("btnApplyUpdate")) $("btnApplyUpdate").addEventListener("click", applyUpdate);
   $("btnElevate").addEventListener("click", elevate);
   $("quitApp").addEventListener("click", quitApp);
   $("btnQuit2").addEventListener("click", quitApp);

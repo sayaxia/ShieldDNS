@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -71,8 +72,12 @@ func main() {
 
 	// 覆盖正在运行的同名 exe 时，Windows 会把旧镜像改名成 "ShieldDNS.exe~" 留在旁边。
 	// 上一次遗留的文件只要当前没被占用就顺手删掉，避免 dist 里堆垃圾。
+	// 应用内自动更新还会把旧文件改成 .old 当回滚备份，重启后同样清掉。
 	if exe, err := os.Executable(); err == nil {
 		_ = os.Remove(exe + "~")
+		_ = os.Remove(exe + ".old")
+		_ = os.Remove(filepath.Join(filepath.Dir(exe), "core", "shielddns-core.exe.old"))
+		_ = os.RemoveAll(filepath.Join(DataDir(), "update"))
 	}
 
 	cfg := loadConfig()
