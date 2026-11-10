@@ -501,3 +501,45 @@ button.compact { padding: 6px 12px; font-size: 12px; }
   .form-grid { grid-template-columns: 1fr; }
   .field.wide { grid-column: auto; }
 }
+
+/* 窗口在小屏 / 高缩放比例下会明显变窄：侧栏收成图标条，卡片与表单改为单列，
+   避免出现「标题被挤成两三行」「开关跑到卡片外面」这类变形。 */
+@media (max-width: 940px) {
+  .sidebar { width: 74px; flex-basis: 74px; padding: 18px 10px 14px; align-items: center; }
+  .brand { padding: 2px 0 18px; justify-content: center; }
+  .brand-text { display: none; }
+  .nav-item { justify-content: center; padding: 10px 8px; }
+  .nav-item span { display: none; }
+  .sidebar-foot .mini-status { justify-content: center; }
+  .sidebar-foot .mini-status strong,
+  .sidebar-foot .mini-status small { display: none; }
+  .sidebar-foot .ghost-btn { display: none; } /* 退出应用在「应用与运行环境」卡里还有一份 */
+  .main { padding: 20px 18px 28px; }
+  .topbar { flex-direction: column; align-items: flex-start; gap: 12px; margin-bottom: 18px; }
+  .chips { justify-content: flex-start; }
+  .card { padding: 16px 16px; }
+  .card-head { flex-wrap: wrap; }
+  .hero { padding: 20px 18px; gap: 18px; }
+  .hero-shield { width: 88px; height: 88px; }
+  .kv { grid-template-columns: 1fr; }
+  .setting-row { flex-wrap: wrap; }
+  .setting-row .switch { margin-left: auto; }
+  .search { width: 100%; }
+}
+
+@media (max-width: 720px) {
+  .stats { grid-template-columns: 1fr; }
+  .hero { flex-direction: column; align-items: flex-start; }
+  .alert { flex-direction: column; align-items: stretch; }
+  .alert-actions { justify-content: flex-end; }
+  .titles h1 { font-size: 20px; }
+}
+
+/* 高度吃紧时先压纵向留白，保证首屏能看到主开关 */
+@media (max-height: 640px) {
+  .main { padding-top: 16px; padding-bottom: 22px; }
+  .hero { padding: 18px 20px; }
+  .hero-shield { width: 84px; height: 84px; }
+  .card { padding: 16px 18px; }
+  .card { margin-bottom: 14px; }
+}
