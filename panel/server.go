@@ -145,6 +145,7 @@ func (a *App) newMux() http.Handler {
 
 	mux.HandleFunc("/panel/ready", func(w http.ResponseWriter, r *http.Request) {
 		// 页面画完首帧后打这个点，主程序收到才把窗口显示出来
+		panelLog("收到页面首帧信号")
 		markUIReady()
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})

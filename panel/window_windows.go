@@ -26,8 +26,16 @@ const (
 	wmExitSizeMove  = 0x0232 // WM_EXITSIZEMOVE
 	wmDpiChanged    = 0x02E0 // WM_DPICHANGED
 
-	spiGetWorkArea = 0x0030
-	swpNoMove      = 0x0002
+	spiGetWorkArea   = 0x0030
+	smXVirtualScreen = 76
+	smYVirtualScreen = 77
+	smCXVirtualScreen = 78
+	smCYVirtualScreen = 79
+	swpNoSize        = 0x0001
+	swpNoMove        = 0x0002
+	// HWND_TOPMOST/HWND_NOTOPMOST 是 -1/-2，用补码表示
+	hwndTopmost    = ^uintptr(0)
+	hwndNotTopmost = ^uintptr(1)
 	swpNoZOrder    = 0x0004
 	swpNoActivate  = 0x0010
 
@@ -289,6 +297,25 @@ func fitWindowToDPI(hwnd uintptr, center bool) {
 	panelLog("窗口按 DPI 适配（无工作区信息）：dpi=%d 尺寸=%dx%d", windowDPI(hwnd), tw, th)
 }
 
+// offScreenBelow 把窗口挪到整个虚拟桌面之外：既不占用户视野（多显示器拼接也不会
+// 落在某块屏上），又留在最近的那块显示器上，这样 WebView2 会正常渲染
+// （隐藏窗口会被 Chromium 挂起，页面根本不加载）。
+func offScreenBelow(hwnd uintptr) {
+	var r winRect
+	if ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
+		return
+	}
+	vx, _, _ := procGetSystemMetrics.Call(smXVirtualScreen)
+	vy, _, _ := procGetSystemMetrics.Call(smYVirtualScreen)
+	vw, _, _ := procGetSystemMetrics.Call(smCXVirtualScreen)
+	vh, _, _ := procGetSystemMetrics.Call(smCYVirtualScreen)
+	x := int(vx) + int(vw)
+	y := int(vy) + int(vh)
+	procSetWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y), 0, 0,
+		swpNoSize|swpNoZOrder|swpNoActivate)
+	panelLog("窗口预热：移到屏幕外 (%d,%d)（%dx%d）", x, y, r.Right-r.Left, r.Bottom-r.Top)
+}
+
 func NewWindow(url string, iconID uint) (*Window, error) {
 	// 建窗之前就按系统缩放算出最终物理尺寸：如果先按逻辑尺寸建窗、显示之后再
 	// SetWindowPos 放大，用户会看到窗口“先小后跳”，跳的中间还是 WebView2 的白色底。
@@ -303,6 +330,10 @@ func NewWindow(url string, iconID uint) (*Window, error) {
 			Height: uint(h0),
 			IconId: iconID,
 			Center: true,
+			// 库默认把窗口建在屏幕中央并显示，此时 WebView2 还没创建，会先露出白底。
+			// 传 Hidden 让它在屏幕外建窗并显示：页面照常加载渲染，但用户看不到，
+			// 等首帧画完再由 main.go 调 Show() 把窗口移回屏幕中央。
+			Hidden: true,
 		},
 	})
 	if wv == nil {
@@ -310,14 +341,11 @@ func NewWindow(url string, iconID uint) (*Window, error) {
 	}
 	win := &Window{wv: wv, hwnd: uintptr(wv.Window())}
 	if win.hwnd != 0 {
-		// 库建完窗就 ShowWindow 了，此时 WebView2 还没创建、页面更没开始加载，
-		// 客户区是窗口类的白底。先藏起来，等页面首帧渲染完再叫 Show()。
-		procShowWindow.Call(win.hwnd, swHide)
 		old, _, _ := procSetWindowLongPtrW.Call(win.hwnd, ^uintptr(3), wndProcAddr) // GWLP_WNDPROC = -4
 		winCtx.old = old
 		win.oldProc = old
-		// 建窗用的是物理像素，这里按 DPI 校正成设计稿的逻辑尺寸
-		fitWindowToDPI(win.hwnd, true)
+		// 库按 Hidden 已把窗口放在屏幕外；这里再兜一次，确保它不在可视区里
+		offScreenBelow(win.hwnd)
 	}
 	wv.Navigate(url)
 	return win, nil
@@ -341,6 +369,12 @@ func (w *Window) Show() {
 	procShowWindow.Call(hwnd, 5) // SW_SHOW
 	procShowWindow.Call(hwnd, 9) // SW_RESTORE
 	procSetForegroundWin.Call(hwnd)
+	// 窗口是在屏幕外预热出来的，SetForegroundWindow 有可能被系统拒绝，
+	// 再走一次“临时置顶”把窗口提到最前面，避免它藏在别的窗口后面。
+	procSetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0,
+		swpNoSize|swpNoMove|swpNoActivate)
+	procSetWindowPos.Call(hwnd, hwndNotTopmost, 0, 0, 0, 0,
+		swpNoSize|swpNoMove|swpNoActivate)
 }
 
 func (w *Window) Destroy() {
