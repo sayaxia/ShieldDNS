@@ -83,25 +83,23 @@
         <img id="heroIcon" src="/assets/shield_on.png" alt="防护状态" />
       </div>
       <div class="hero-copy">
-        <div class="state-line">
-          <span class="pill on" id="statePill"><i class="dot"></i><span>保护已开启</span></span>
-          <span class="muted" id="heroTime">—</span>
-        </div>
-        <h2 id="heroTitle">DNS 防护正在运行</h2>
-        <p id="heroDesc">所有域名查询会先经过过滤引擎，命中规则直接返回 NXDOMAIN，广告与追踪域名不会被真正解析。</p>
         <div class="hero-meta">
           <span>监听 <b id="heroListen">—</b></span>
           <span>规则 <b id="heroRules">—</b></span>
           <span>拦截率 <b id="heroRate">—</b></span>
         </div>
+        <h2 id="heroTitle">DNS 防护正在运行</h2>
       </div>
       <div class="hero-actions">
-        <label class="switch big" title="开启 / 暂停保护">
-          <input type="checkbox" id="protectToggle" />
-          <span class="track"><span class="knob"></span></span>
-        </label>
-        <span class="switch-label" id="switchLabel">已开启</span>
+        <div class="hero-switch-row">
+          <label class="switch big" title="开启 / 暂停保护">
+            <input type="checkbox" id="protectToggle" />
+            <span class="track"><span class="knob"></span></span>
+          </label>
+          <span class="switch-label" id="switchLabel">已开启</span>
+        </div>
         <button class="primary" id="btnUpdateAll">更新全部订阅</button>
+        <span class="hero-updated" id="heroUpdated">订阅更新时间 —</span>
       </div>
     </div>
 
@@ -333,7 +331,7 @@
 
   <footer class="foot">
     <span>ShieldDNS · Rust 核心 + Go 面板</span>
-    <span>内置不含第三方规则，订阅由你自行添加</span>
+    <span>无内置规则，规则需自行添加</span>
   </footer>
 </main>
 

@@ -101,6 +101,15 @@ function setText(id, value) {
 
 /* ---------- 概览 ---------- */
 
+// 订阅更新时间：取所有订阅里最近的一次更新时刻；都没更新过就显示占位符
+function latestFilterUpdate(st) {
+  const times = (st.filters || [])
+    .map((f) => (f && f.last_update ? String(f.last_update) : ""))
+    .filter(Boolean)
+    .sort();
+  return times.length ? times[times.length - 1] : "—";
+}
+
 function renderStatus(st) {
   if (!st) {
     setText("sideState", "核心未连接");
@@ -111,14 +120,9 @@ function renderStatus(st) {
   $("protectToggle").checked = on;
   $("hero").classList.toggle("paused", !on);
   $("heroIcon").src = on ? "/assets/shield_on.png" : "/assets/shield_off.png";
-  $("statePill").className = `pill ${on ? "on" : "off"}`;
-  $("statePill").innerHTML = `<i class="dot ${on ? "on" : "off"}"></i><span>${on ? "保护已开启" : "保护已暂停"}</span>`;
   $("heroTitle").textContent = on ? "DNS 防护正在运行" : "保护已暂停";
-  $("heroDesc").textContent = on
-    ? "所有域名查询会先经过过滤引擎，命中规则直接返回 NXDOMAIN，广告与追踪域名不会被真正解析。"
-    : "过滤已关闭，所有查询都会直接转发给上游 DNS。重新打开开关即可恢复拦截。";
   $("switchLabel").textContent = on ? "已开启" : "已暂停";
-  $("heroTime").textContent = st.time || "";
+  $("heroUpdated").textContent = `订阅更新时间 ${latestFilterUpdate(st)}`;
 
   $("heroListen").textContent = `${st.listen_address}:${st.listen_port}`;
   $("heroRules").textContent = num(st.rules_total);

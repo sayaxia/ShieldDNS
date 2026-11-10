@@ -30,9 +30,9 @@ const (
 	swpNoZOrder    = 0x0004
 	swpNoActivate  = 0x0010
 
-	// 常规窗口的逻辑尺寸（CSS 像素），960×593 是黄金比例 1.618，实际按当前 DPI 换算成物理像素
+	// 常规窗口的逻辑尺寸（CSS 像素）：960×720（4:3），概览页可完整显示且留白合适
 	baseLogicalWidth  = 960
-	baseLogicalHeight = 593
+	baseLogicalHeight = 720
 
 	// 最小逻辑宽度：再往下整页等比缩得太小，字号开始难认
 	minLogicalWidth = 790
