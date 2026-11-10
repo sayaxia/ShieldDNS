@@ -9,12 +9,11 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
-
-const appVersion = "1.0.0"
 
 type App struct {
 	cfgMu      sync.Mutex
@@ -163,6 +162,9 @@ func (a *App) newMux() http.Handler {
 	mux.HandleFunc("/system/guard", a.handleGuard)
 	mux.HandleFunc("/system/helper", a.handleHelper)
 	mux.HandleFunc("/system/autostart", a.handleAutoStart)
+	mux.HandleFunc("/system/port", a.handlePort)
+	mux.HandleFunc("/system/update", a.handleUpdate)
+	mux.HandleFunc("/system/openrelease", a.handleOpenRelease)
 	mux.HandleFunc("/system/takeover", a.handleTakeover)
 	mux.HandleFunc("/system/release", a.handleRelease)
 	mux.HandleFunc("/system/elevate", a.handleElevate)
@@ -201,6 +203,7 @@ func (a *App) newMux() http.Handler {
 func (a *App) handleInfo(w http.ResponseWriter, r *http.Request) {
 	cfg := loadConfig()
 	adapters := ListAdapters()
+	owner := statPort(cfg.ListenPort)
 	info := map[string]any{
 		"admin":              IsAdmin(),
 		"adminCapable":       IsAdminCapable(),
@@ -219,6 +222,8 @@ func (a *App) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"takenOver":          IsTakenOver(),
 		"adapters":           adapters,
 		"uptime":             int64(time.Since(a.startedAt).Seconds()),
+		"portOwner":          owner,
+		"portBlocked":        owner != nil,
 		"upstreamMode":       cfg.UpstreamMode,
 		"upstreams":          cfg.Upstreams,
 		"customUpstreams":    cfg.CustomUpstreams,
@@ -230,6 +235,71 @@ func (a *App) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"helperRunning":      HelperRunning(),
 	}
 	writeJSON(w, 200, info)
+}
+
+// handlePort：查询端口占用者，或「一键结束占用进程并重试」。
+// 只做两件事——告诉用户是谁占着，以及在用户明确点按钮后结束它并重拉核心。
+func (a *App) handlePort(w http.ResponseWriter, r *http.Request) {
+	port := loadConfig().ListenPort
+	if v := r.URL.Query().Get("port"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 && p < 65536 {
+			port = p
+		}
+	}
+	switch r.Method {
+	case http.MethodGet:
+		owner := statPort(port)
+		writeJSON(w, 200, map[string]any{
+			"port":        port,
+			"blocked":     owner != nil,
+			"owner":       owner,
+			"coreRunning": a.core.Running(),
+			"coreError":   a.core.LastError(),
+		})
+	case http.MethodPost:
+		var req struct {
+			Action string `json:"action"`
+			Port   int    `json:"port"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Port > 0 && req.Port < 65536 {
+			port = req.Port
+		}
+		var owner *PortOwner
+		switch req.Action {
+		case "kill", "":
+			var err error
+			owner, err = KillPortOwner(port)
+			if err != nil {
+				writeJSON(w, 500, map[string]any{"error": err.Error(), "portOwner": owner})
+				return
+			}
+		case "retry", "restart":
+			owner = statPort(port)
+		default:
+			writeJSON(w, 400, map[string]string{"error": "不支持的操作"})
+			return
+		}
+		if owner != nil {
+			writeJSON(w, 409, map[string]any{
+				"error":     fmt.Sprintf("端口 %d 仍被 %s（PID %d）占用", port, owner.Name, owner.PID),
+				"portOwner": owner,
+			})
+			return
+		}
+		a.core.Stop()
+		if err := a.core.Start(); err != nil {
+			writeJSON(w, 500, map[string]any{
+				"error":     "端口已释放，但核心仍启动失败：" + err.Error(),
+				"coreError": a.core.LastError(),
+				"portOwner": statPort(port),
+			})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "port": port, "portOwner": owner})
+	default:
+		writeJSON(w, 405, map[string]string{"error": "仅支持 GET / POST"})
+	}
 }
 
 func (a *App) handleProtection(w http.ResponseWriter, r *http.Request) {
@@ -244,16 +314,42 @@ func (a *App) handleProtection(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "参数错误"})
 		return
 	}
+	if req.Enabled {
+		// 开防护前先确认端口是自己的：53 被别的程序占着时核心根本没在监听，
+		// 继续往下走只会得到一个"连不上核心"的模糊错误。
+		pre := loadConfig()
+		if owner := statPort(pre.ListenPort); owner != nil {
+			writeJSON(w, 409, map[string]any{
+				"error":     fmt.Sprintf("端口 %d 被 %s（PID %d）占用，核心无法监听，防护未开启", pre.ListenPort, owner.Name, owner.PID),
+				"portOwner": owner,
+				"enabled":   false,
+			})
+			return
+		}
+		if !a.core.Running() {
+			a.core.Stop()
+			if err := a.core.Start(); err != nil {
+				writeJSON(w, 500, map[string]any{
+					"error":     "核心启动失败：" + err.Error(),
+					"coreError": a.core.LastError(),
+					"portOwner": statPort(pre.ListenPort),
+					"enabled":   false,
+				})
+				return
+			}
+		}
+	}
 	if err := a.setProtection(req.Enabled); err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error(), "enabled": !req.Enabled})
 		return
 	}
 	cfg := loadConfig()
-	if cfg.DNSMode == "system" && !req.Enabled && IsTakenOver() {
+	// 端口 53 就等同于"接管本机 DNS"，不再需要用户在界面上挑模式
+	if cfg.ListenPort == 53 && !req.Enabled && IsTakenOver() {
 		// 关防护就把网卡 DNS 还回去，避免"程序还开着但已不拦截，解析却还挂在 127.0.0.1 上"
 		_ = releaseSystemDNS()
 	}
-	if cfg.DNSMode == "system" && req.Enabled && !IsTakenOver() {
+	if cfg.ListenPort == 53 && req.Enabled && !IsTakenOver() {
 		// 已经接管过就不要再写一次，否则会把 127.0.0.1 当成原始 DNS 记进备份
 		if err := takeoverSystemDNS(); err != nil {
 			writeJSON(w, 500, map[string]any{"error": "防护已开，但接管系统 DNS 失败：" + err.Error(), "enabled": true})
@@ -281,23 +377,9 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "参数错误"})
 		return
 	}
-	if req.DNSMode != "custom" && req.DNSMode != "system" {
-		writeJSON(w, 400, map[string]string{"error": "DNS 模式不合法"})
-		return
-	}
 	if req.UpstreamMode != "" && req.UpstreamMode != "custom" && req.UpstreamMode != "system" {
 		writeJSON(w, 400, map[string]string{"error": "上游模式不合法"})
 		return
-	}
-	if req.DNSMode == "system" {
-		if req.ListenPort != 53 {
-			writeJSON(w, 400, map[string]string{"error": "接管系统 DNS 时端口必须是 53"})
-			return
-		}
-		if !IsAdmin() && !HelperRunning() {
-			writeJSON(w, 403, map[string]string{"error": "接管系统 DNS 需要管理员权限：请先点『以管理员身份重启』，或在设置页安装一次『后台助手』（之后免 UAC）"})
-			return
-		}
 	}
 	if req.ListenPort < 1 || req.ListenPort > 65535 {
 		writeJSON(w, 400, map[string]string{"error": "端口范围应为 1-65535"})
@@ -308,9 +390,23 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 目标端口被别人占着就别保存：保存了也起不来，还会把用户上一份好配置冲掉。
+	if owner := statPort(req.ListenPort); owner != nil {
+		writeJSON(w, 409, map[string]any{
+			"error":     fmt.Sprintf("端口 %d 被 %s（PID %d）占用，无法切换到该端口", req.ListenPort, owner.Name, owner.PID),
+			"portOwner": owner,
+		})
+		return
+	}
+
 	cfg := loadConfig()
 	cfg.ListenPort = req.ListenPort
-	cfg.DNSMode = req.DNSMode
+	// 模式由端口决定：53 = 接管本机，其它 = 仅本机定向
+	if cfg.ListenPort == 53 {
+		cfg.DNSMode = "system"
+	} else {
+		cfg.DNSMode = "custom"
+	}
 	cfg.BlockMode = req.BlockMode
 	cfg.CacheEnabled = req.CacheEnabled
 	cfg.LogQueries = req.LogQueries
@@ -340,9 +436,9 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 切换到 53 + 接管：先还原旧 DNS，再重启核心，最后接管
+	// 切端口时：新端口不是 53 就先还原旧 DNS，再重启核心
 	wasTakenOver := IsTakenOver()
-	if wasTakenOver && (req.DNSMode != "system" || req.ListenPort != 53) {
+	if wasTakenOver && req.ListenPort != 53 {
 		if err := releaseSystemDNS(); err != nil {
 			writeJSON(w, 500, map[string]string{"error": "还原系统 DNS 失败：" + err.Error()})
 			return
@@ -356,20 +452,27 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	a.reloadConfig()
 
-	if req.DNSMode == "system" {
-		if err := takeoverSystemDNS(); err != nil {
-			writeJSON(w, 500, map[string]string{"error": "接管系统 DNS 失败：" + err.Error()})
-			return
+	// 端口是 53 且防护在开 → 自动接管，用户不需要再点任何东西
+	takeoverNote := ""
+	if cfg.ListenPort == 53 {
+		if st, err := a.fetchStatus(); err == nil && st.Protection && !IsTakenOver() {
+			if err := takeoverSystemDNS(); err != nil {
+				takeoverNote = "接管系统 DNS 失败：" + err.Error()
+			}
 		}
 	}
-	writeJSON(w, 200, map[string]any{
+	resp := map[string]any{
 		"ok":             true,
 		"listenPort":     req.ListenPort,
-		"dnsMode":        req.DNSMode,
+		"dnsMode":        cfg.DNSMode,
 		"upstreamMode":   cfg.UpstreamMode,
 		"upstreams":      cfg.Upstreams,
 		"upstreamSource": upstreamNote,
-	})
+	}
+	if takeoverNote != "" {
+		resp["takeoverError"] = takeoverNote
+	}
+	writeJSON(w, 200, resp)
 }
 
 func (a *App) handleUpstreams(w http.ResponseWriter, r *http.Request) {

@@ -15,8 +15,29 @@ pub async fn run(state: Arc<AppState>) -> Result<(), Box<dyn std::error::Error>>
         (cfg.listen_address.clone(), cfg.listen_port)
     };
     let bind: SocketAddr = format!("{addr}:{port}").parse()?;
-    let udp = Arc::new(UdpSocket::bind(bind).await?);
-    let tcp = TcpListener::bind(bind).await?;
+    // 绑不上就明确失败，交给面板提示「谁占着这个端口」。
+    // 不做「换个端口接着跑」：换了端口系统解析器打不到，状态页却一切正常，比直接失败更坑。
+    let udp = match UdpSocket::bind(bind).await {
+        Ok(s) => Arc::new(s),
+        Err(err) => {
+            eprintln!("[core] 无法监听 udp {bind}：{err}");
+            eprintln!("[core] 端口 {port} 被其它程序占用或不可用，DNS 服务未启动（不会自动换端口）");
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                format!("{bind} 被占用：{err}"),
+            )));
+        }
+    };
+    let tcp = match TcpListener::bind(bind).await {
+        Ok(l) => l,
+        Err(err) => {
+            eprintln!("[core] 无法监听 tcp {bind}：{err}");
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                format!("{bind} 被占用：{err}"),
+            )));
+        }
+    };
     println!("[core] DNS 服务已启动: udp/tcp {bind}");
 
     let udp_state = state.clone();

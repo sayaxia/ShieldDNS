@@ -66,7 +66,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(config_path: PathBuf, cfg: Config) -> Arc<Self> {
         let client = reqwest::Client::builder()
-            .user_agent("ShieldDNS/0.1 (+https://github.com/abclq/home-dns-adblock)")
+            .user_agent("ShieldDNS/0.1 (+https://github.com/sayaxia/ShieldDNS)")
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_default();

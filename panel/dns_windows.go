@@ -64,7 +64,7 @@ func IsAdmin() bool {
 // IsAdminCapable 账号是否属于 Administrators 组（可能只是没提权）。
 // whoami /groups 里会带 deny-only 标记，正好能区分"标准用户"和"管理员但未提权"。
 func IsAdminCapable() bool {
-	out, err := runHidden("whoami.exe", "/groups")
+	out, err := runHidden(sysExe("whoami.exe"), "/groups")
 	if err != nil {
 		return false
 	}
@@ -77,7 +77,10 @@ func IsAdminCapable() bool {
 }
 
 func runPowerShell(script string) (string, error) {
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	// 必须用绝对路径：面板被裁剪过 PATH 的父进程拉起时，裸 powershell.exe 会直接找不到，
+	// 结果就是"读本机 DNS 永远为空"这种静默失败。
+	ps := sysExe(`WindowsPowerShell\v1.0\powershell.exe`)
+	cmd := exec.Command(ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	out, err := cmd.CombinedOutput()
 	if err != nil {

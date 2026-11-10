@@ -7,8 +7,10 @@ const state = {
   rulesLoaded: false,
   toggling: false,
   tick: 0,
-  // 设置页有未保存的修改时，轮询不能拿服务器旧值回写，否则用户刚点的「53 端口 + 自动接管」会被打回 25353
+  // 设置页有未保存的修改时，轮询不能拿服务器旧值回写，否则用户刚点的「53 端口 + 接管」会被旧值覆盖
   settingsDirty: false,
+  // 端口被占提示条：用户点过「稍后处理」就不再每次轮询重新弹
+  portDismissed: false,
 };
 
 const PAGE_META = {
@@ -16,7 +18,7 @@ const PAGE_META = {
   filters: ["过滤订阅", "通过 URL 订阅 AdGuard 规则并自动更新"],
   rules: ["自定义规则", "手工维护的规则，保存后立即生效"],
   logs: ["查询日志", "每一次经过 ShieldDNS 的域名查询"],
-  settings: ["设置", "端口、上游、系统 DNS 接管与运行环境"],
+  settings: ["设置", "端口、上游、启动与运行环境"],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -68,7 +70,9 @@ async function api(path, opts = {}) {
     data = { raw: text };
   }
   if (!res.ok) {
-    throw new Error(data.error || data.message || `请求失败（HTTP ${res.status}）`);
+    const err = new Error(data.error || data.message || `请求失败（HTTP ${res.status}）`);
+    err.data = data;
+    throw err;
   }
   return data;
 }
@@ -369,11 +373,7 @@ function renderInfo(info, st) {
   const chip = $("chipAdmin");
   chip.innerHTML = `<i class="dot ${info.admin ? "on" : "off"}"></i><span>${info.admin ? "管理员权限" : "普通权限"}</span>`;
   $("adminBadge").className = `badge ${info.admin ? "ok" : "warn"}`;
-  $("adminBadge").textContent = info.admin ? "管理员权限" : "需要管理员权限";
-
-  const tk = $("takeoverBadge");
-  tk.className = `badge ${info.takenOver ? "ok" : ""}`;
-  tk.textContent = info.takenOver ? "已接管系统 DNS" : "未接管";
+  $("adminBadge").textContent = info.admin ? "管理员权限" : "普通权限";
 
   const core = $("kvCore");
   core.innerHTML = info.coreRunning
@@ -383,58 +383,61 @@ function renderInfo(info, st) {
   setText("kvAdmin", info.admin ? "管理员" : info.adminCapable ? "管理员组成员（未提权，可点右下角提权）" : "标准用户");
   setText("kvData", info.dataDir || "—");
   setText("kvConfig", info.configPath || "—");
-  setText("kvVersion", `v${info.version || "1.0.0"}`);
+  setText("kvVersion", `v${info.version || "0.1.0"}`);
+  setText("chipVersion", `v${info.version || "0.1.0"}`);
   setText("chipPort", `${st ? st.listen_address : "127.0.0.1"}:${st ? st.listen_port : info.listenPort}`);
 
-  const list = $("adapterList");
-  const adapters = info.adapters || [];
-  list.innerHTML = adapters.length
-    ? adapters
-        .map(
-          (a) => `<div class="adapter">
-            <span class="a-alias">${esc(a.alias)}</span>
-            <span class="a-dns">${esc((a.addresses || []).join(", "))}</span>
-          </div>`
-        )
-        .join("")
-    : '<div class="empty small">没有检测到已配置 DNS 的 IPv4 网卡</div>';
+  // DNS 服务状态：只讲端口，不再有"运行模式"概念
+  const svc = $("svcBadge");
+  if (svc) {
+    const running = !!info.coreRunning;
+    const blocked = !!info.portOwner;
+    svc.className = `badge ${running ? "ok" : "warn"}`;
+    svc.textContent = running
+      ? `监听 ${info.listenPort}`
+      : blocked
+        ? `端口 ${info.listenPort} 被占用`
+        : "核心未运行";
+  }
+  const note = $("portNote");
+  if (note) {
+    note.textContent =
+      info.listenPort === 53
+        ? "53 是系统解析器唯一会命中的端口；开启防护时自动把本机网卡 DNS 指向 127.0.0.1，无需手动接管。"
+        : `当前端口 ${info.listenPort}：只有显式指定该端口的客户端才会经过 ShieldDNS，浏览器与系统解析仍走 53。`;
+  }
 
-  // 用户在设置页动过但还没保存时，一律不回写，避免把「53 端口 + 自动接管」打回 25353
+  // 上游：未勾选=跟随本机，勾选=自定义
+  const custom = state.settingsDirty ? $("chkCustomUpstream").checked : info.upstreamMode === "custom";
   if (!state.settingsDirty) {
     if (st) {
       $("setPort").value = st.listen_port;
       $("setUpstreams").value = (st.upstreams || []).join("\n");
       $("setBlockMode").value = st.block_mode || "nxdomain";
     }
-    const mode = info.dnsMode === "system" ? "system" : "custom";
-    document.querySelectorAll('input[name="dnsmode"]').forEach((r) => {
-      r.checked = r.value === mode;
-      r.closest(".mode").classList.toggle("active", r.checked);
-    });
-    const um = info.upstreamMode === "system" ? "system" : "custom";
-    document.querySelectorAll('input[name="upmode"]').forEach((r) => {
-      r.checked = r.value === um;
-      r.closest(".mode").classList.toggle("active", r.checked);
-    });
   }
+  $("chkCustomUpstream").checked = custom;
+  const upBadge = $("upModeBadge");
+  if (upBadge) {
+    upBadge.textContent = custom ? "自定义" : "跟随本机";
+    upBadge.className = `badge ${custom ? "ok" : ""}`;
+  }
+  $("upCustom").classList.toggle("hidden", !custom);
+  $("upSystem").classList.toggle("hidden", custom);
 
-  const upMode = state.settingsDirty
-    ? (document.querySelector('input[name="upmode"]:checked') || { value: "custom" }).value
-    : info.upstreamMode === "system"
-      ? "system"
-      : "custom";
-
-  const guardOn = !!info.guardTask;
-  const guardBadge = $("guardBadge");
-  guardBadge.textContent = guardOn ? "已注册" : "未注册";
-  guardBadge.className = `badge ${guardOn ? "ok" : "warn"}`;
+  const eff = info.upstreams || [];
+  $("upEffective").innerHTML = eff.length
+    ? eff.map((u) => `<span class="chip soft">${esc(u)}</span>`).join("")
+    : '<span class="chip bad"><i class="dot"></i><span>没有可用的上游</span></span>';
   setText(
-    "kvGuard",
-    guardOn
-      ? "计划任务 ShieldDNS-DNS-Guard 已存在（开机 20s / 登录 10s / 网络连通事件 / 每 15 分钟复查）"
-      : "未注册：异常退出或重启后，网卡 DNS 会一直指向 127.0.0.1，需要手动还原"
+    "upSource",
+    info.upstreamSource
+      ? `来源：${info.upstreamSource}${info.upstreamCapturedAt ? " · " + info.upstreamCapturedAt : ""}`
+      : "尚未读取本机 DNS，保存设置时会自动读取"
   );
-  $("chkAutoStart").checked = !!info.autoStartEnabled;
+
+  const customList = info.customUpstreams && info.customUpstreams.length ? info.customUpstreams : info.upstreams || [];
+  if (document.activeElement !== $("setUpstreams")) $("setUpstreams").value = customList.join("\n");
 
   const helperOn = !!info.helperInstalled;
   const helperUp = !!info.helperRunning;
@@ -444,28 +447,16 @@ function renderInfo(info, st) {
   setText(
     "kvHelper",
     helperUp
-      ? "任务已安装、助手在线：普通权限也能直接接管/还原系统 DNS，不再弹 UAC"
+      ? "常驻 SYSTEM 身份，负责接管/还原系统 DNS，并在核心掉线时自动还原，全程免 UAC。"
       : helperOn
-        ? "任务已安装但管道连不上：点「重启助手」，或用管理员身份重启面板后再点一次"
-        : "未安装：切 53 端口后接管系统 DNS 仍需每次提权"
+        ? "任务已安装但管道连不上：点「重启」，或用管理员身份重启面板后再点一次。"
+        : "未安装：开启防护时的 DNS 接管需要一次 UAC 提权；安装后长期免弹。"
   );
-  const customList =
-    info.customUpstreams && info.customUpstreams.length ? info.customUpstreams : info.upstreams || [];
-  if (document.activeElement !== $("setUpstreams")) $("setUpstreams").value = customList.join("\n");
-  $("upCustom").classList.toggle("hidden", upMode !== "custom");
-  $("upSystem").classList.toggle("hidden", upMode !== "system");
-  if (upMode === "system") {
-    const eff = info.upstreams || [];
-    $("upEffective").innerHTML = eff.length
-      ? eff.map((u) => `<span class="chip soft">${esc(u)}</span>`).join("")
-      : '<span class="chip bad"><i class="dot"></i><span>没有可用的上游</span></span>';
-    setText(
-      "upSource",
-      info.upstreamSource
-        ? `来源：${info.upstreamSource}${info.upstreamCapturedAt ? " · " + info.upstreamCapturedAt : ""}`
-        : "尚未读取本机 DNS，保存设置时会自动读取"
-    );
-  }
+  // 装过就只留「重启 / 卸载」，没装才显示「安装」，避免三个按钮并排挤成一团
+  $("btnHelperOn").style.display = helperOn ? "none" : "";
+  $("btnHelperStart").style.display = helperOn ? "" : "none";
+  $("btnHelperOff").style.display = helperOn ? "" : "none";
+  $("chkAutoStart").checked = !!info.autoStartEnabled;
 }
 
 async function loadInfo() {
@@ -473,24 +464,117 @@ async function loadInfo() {
     const info = await api("/system/info");
     state.info = info;
     renderInfo(info, state.status);
+    renderPortBanner(info);
   } catch (e) {
     /* ignore */
   }
 }
 
-async function saveSettings() {
-  const mode = document.querySelector('input[name="dnsmode"]:checked').value;
-  const upMode = document.querySelector('input[name="upmode"]:checked').value;
-  let port = parseInt($("setPort").value, 10);
+/* ---------- 端口被占提示 ---------- */
+
+function renderPortBanner(info) {
+  const banner = $("portBanner");
+  if (!banner) return;
+  const owner = info && info.portOwner;
+  if (!owner || state.portDismissed) {
+    banner.classList.add("hidden");
+    return;
+  }
+  const port = owner.port || (info && info.listenPort) || 53;
+  const who = owner.name
+    ? `${owner.name}（PID ${owner.pid}）`
+    : `PID ${owner.pid} 的进程`;
+  setText("portBannerTitle", `端口 ${port} 被占用，DNS 防护无法启动`);
+  setText(
+    "portBannerBody",
+    `${who} 正在监听 ${port}。系统解析器只会把查询发到 53，所以 ShieldDNS 不会自动换端口——结束该进程后点右侧按钮重试即可。`
+  );
+  banner.classList.remove("hidden");
+}
+
+async function killPortOwner() {
+  const btn = $("btnKillPort");
+  const port = (state.info && state.info.listenPort) || 53;
+  btn.disabled = true;
+  btn.textContent = "正在结束…";
+  try {
+    await api("/system/port", { method: "POST", body: { action: "kill", port } });
+    state.portDismissed = false;
+    toast("已结束占用进程，核心已重新启动");
+    await refreshStatus();
+    await loadInfo();
+    if (state.info && !state.info.coreRunning) {
+      toast("核心仍未就绪，请在设置页查看核心日志", "err");
+    }
+  } catch (e) {
+    if (e.data && e.data.portOwner) {
+      state.portDismissed = false;
+      renderPortBanner({ portOwner: e.data.portOwner, listenPort: port });
+    }
+    toast(e.message, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "结束占用进程并重试";
+  }
+}
+
+// 检查更新：只查 GitHub Release，不自动替换正在运行的 exe
+async function checkUpdate(force, quiet) {
+  const notify = quiet ? () => {} : toast;
+  const btn = $("btnCheckUpdate");
+  const note = $("updateNote");
+  const text = $("updateText");
+  const openBtn = $("btnOpenRelease");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "检查中…";
+  }
+  try {
+    const res = await api(`/system/update${force ? "?force=1" : ""}`);
+    note.classList.remove("hidden");
+    openBtn.classList.add("hidden");
+    if (!res.ok) {
+      state.update = res;
+      text.textContent = `检查失败：${res.error || "未知错误"}（已将版本 v${res.current}）`;
+      notify("检查更新失败，请检查网络或代理", "err");
+      return;
+    }
+    state.update = res;
+    if (res.hasUpdate) {
+      const size = res.downloadSize ? ` · ${(res.downloadSize / 1048576).toFixed(1)} MB` : "";
+      text.textContent = `发现新版本 v${res.latest}（当前 v${res.current}）${size}`;
+      openBtn.classList.remove("hidden");
+      notify(`发现新版本 v${res.latest}`);
+    } else {
+      text.textContent = `已是最新版本 v${res.current}（GitHub 最新 Release：v${res.latest}）`;
+      notify("已是最新版本");
+    }
+  } catch (e) {
+    note.classList.remove("hidden");
+    openBtn.classList.add("hidden");
+    text.textContent = `检查失败：${e.message}`;
+    notify(e.message, "err");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "检查更新";
+    }
+  }
+}
+
+function openReleasePage() {
+  const url = (state.update && state.update.releaseURL) || "https://github.com/sayaxia/ShieldDNS/releases/latest";
+  api("/system/openrelease", { method: "POST", body: { url } })
+    .then(() => toast("已在浏览器打开下载页"))
+    .catch((e) => toast(e.message, "err"));
+}
+
+async function saveSettings() {  let port = parseInt($("setPort").value, 10);
   if (!port || port < 1 || port > 65535) {
     toast("端口应为 1-65535", "warn");
     return;
   }
-  if (mode === "system" && port !== 53) {
-    port = 53;
-    $("setPort").value = 53;
-    toast("自动接管模式已把端口修正为 53", "warn");
-  }
+  const upMode = $("chkCustomUpstream").checked ? "custom" : "system";
   const upstreams = $("setUpstreams")
     .value.split("\n")
     .map((s) => s.trim())
@@ -500,7 +584,7 @@ async function saveSettings() {
       method: "POST",
       body: {
         listen_port: port,
-        dns_mode: mode,
+        dns_mode: port === 53 ? "system" : "custom",
         block_mode: $("setBlockMode").value,
         upstream_mode: upMode,
         upstreams,
@@ -512,26 +596,6 @@ async function saveSettings() {
     state.settingsDirty = false;
     await refreshStatus();
     await loadInfo();
-  } catch (e) {
-    toast(e.message, "err");
-  }
-}
-
-async function takeoverDns() {
-  try {
-    await api("/system/takeover", { method: "POST", body: {} });
-    toast("已接管系统 DNS，全部网卡指向 127.0.0.1");
-    loadInfo();
-  } catch (e) {
-    toast(e.message + "（可在下方“以管理员身份重启”后重试）", "err");
-  }
-}
-
-async function releaseDns() {
-  try {
-    await api("/system/release", { method: "POST", body: {} });
-    toast("已还原系统 DNS");
-    loadInfo();
   } catch (e) {
     toast(e.message, "err");
   }
@@ -611,6 +675,10 @@ function bind() {
       await loadInfo();
     } catch (e) {
       ev.target.checked = !enabled;
+      if (e.data && e.data.portOwner) {
+        state.portDismissed = false;
+        renderPortBanner({ portOwner: e.data.portOwner });
+      }
       toast(e.message, "err");
     } finally {
       state.toggling = false;
@@ -646,23 +714,17 @@ function bind() {
   });
 
   $("btnSaveSettings").addEventListener("click", saveSettings);
-  $("btnTakeoverDns").addEventListener("click", takeoverDns);
-  $("btnReleaseDns").addEventListener("click", releaseDns);
+  $("btnKillPort").addEventListener("click", killPortOwner);
+  $("btnHidePort").addEventListener("click", () => {
+    state.portDismissed = true;
+    $("portBanner").classList.add("hidden");
+  });
   $("btnRestartCore").addEventListener("click", restartCore);
+  if ($("btnCheckUpdate")) $("btnCheckUpdate").addEventListener("click", () => checkUpdate(true));
+  if ($("btnOpenRelease")) $("btnOpenRelease").addEventListener("click", openReleasePage);
   $("btnElevate").addEventListener("click", elevate);
   $("quitApp").addEventListener("click", quitApp);
   $("btnQuit2").addEventListener("click", quitApp);
-
-  document.querySelectorAll('input[name="dnsmode"]').forEach((r) => {
-    r.addEventListener("change", () => {
-      state.settingsDirty = true;
-      document.querySelectorAll(".mode[data-mode]").forEach((m) => m.classList.remove("active"));
-      r.closest(".mode").classList.add("active");
-      if (r.value === "system") {
-        $("setPort").value = 53;
-      }
-    });
-  });
 
   ["setPort", "setUpstreams", "setBlockMode"].forEach((id) => {
     $(id).addEventListener("input", () => {
@@ -670,19 +732,19 @@ function bind() {
     });
   });
 
-  document.querySelectorAll('input[name="upmode"]').forEach((r) => {
-    r.addEventListener("change", () => {
-      state.settingsDirty = true;
-      document.querySelectorAll(".mode[data-upmode]").forEach((m) => m.classList.remove("active"));
-      r.closest(".mode").classList.add("active");
-      $("upCustom").classList.toggle("hidden", r.value !== "custom");
-      $("upSystem").classList.toggle("hidden", r.value !== "system");
-    });
+  // 上游只有一个勾选框：勾上=自定义，不勾=跟随本机
+  $("chkCustomUpstream").addEventListener("change", (e) => {
+    state.settingsDirty = true;
+    const custom = e.target.checked;
+    $("upCustom").classList.toggle("hidden", !custom);
+    $("upSystem").classList.toggle("hidden", custom);
+    const badge = $("upModeBadge");
+    if (badge) {
+      badge.textContent = custom ? "自定义" : "跟随本机";
+      badge.className = `badge ${custom ? "ok" : ""}`;
+    }
   });
   $("btnCaptureUpstreams").addEventListener("click", captureUpstreams);
-  $("btnGuardOn").addEventListener("click", () => guardAction("register"));
-  $("btnGuardOff").addEventListener("click", () => guardAction("unregister"));
-  $("btnGuardTest").addEventListener("click", () => guardAction("run"));
   $("btnHelperOn").addEventListener("click", () => helperAction("register"));
   $("btnHelperOff").addEventListener("click", () => helperAction("unregister"));
   $("btnHelperStart").addEventListener("click", () => helperAction("start"));
@@ -709,16 +771,6 @@ async function helperAction(action) {
           ? "后台助手已卸载，接管系统 DNS 将恢复为每次提权"
           : "已请求启动后台助手"
     );
-    await loadInfo();
-  } catch (e) {
-    toast(e.message, "err");
-  }
-}
-
-async function guardAction(action) {
-  try {
-    await api("/system/guard", { method: "POST", body: { action } });
-    toast(action === "register" ? "看门狗任务已注册" : action === "unregister" ? "看门狗任务已注销" : "已触发一次检查，结果见 watchdog.log");
     await loadInfo();
   } catch (e) {
     toast(e.message, "err");
@@ -778,6 +830,7 @@ async function boot() {
   await refreshStatus();
   await Promise.all([refreshRecent(), refreshTop(), loadInfo()]);
   await loadFilters();
+  checkUpdate(false, true);
   setInterval(tick, 2000);
 }
 

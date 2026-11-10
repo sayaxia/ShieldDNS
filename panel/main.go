@@ -104,19 +104,10 @@ func main() {
 	app.panelPort = port
 
 	// 核心放到后台启动，失败也不阻塞界面。
-	// 默认端口是 53（Windows 不需要特权端口），但少数机器上 53 会被别的程序抢走，
-	// 这时自动回退到 25353，避免"核心起不来"的死局（界面里的监听端口会随之显示 25353）。
+	// 端口不做任何自动回退：53 是唯一能被系统解析器命中的端口，换成别的端口只会
+	// "看着在跑、实际一条都不拦"。绑不上就留在失败状态，由界面把占用者摊开给用户。
 	go func() {
-		if err := app.core.Start(); err != nil {
-			if cur := loadConfig(); cur.ListenPort == 53 {
-				app.core.Stop()
-				cur.ListenPort = 25353
-				cur.DNSMode = "custom" // 端口回退后 127.0.0.1 就不在 53 上，接管状态无法维持
-				_ = saveConfig(cur)
-				app.reloadConfig()
-				_ = app.core.Start()
-			}
-		}
+		_ = app.core.Start()
 	}()
 
 	tray := NewTray()
@@ -210,7 +201,7 @@ func releaseSingleInstance() {
 }
 
 func openInBrowser(url string) {
-	cmd := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", url)
+	cmd := exec.Command(sysExe("rundll32.exe"), "url.dll,FileProtocolHandler", url)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	_ = cmd.Start()
 }

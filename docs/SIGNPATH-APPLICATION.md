@@ -119,7 +119,7 @@ Yes. Both binaries are built by the GitHub Actions workflow from this repository
 **Third-party components included**
 
 ```
-None as binary. Go modules (jchv/go-webview2, golang.org/x/sys) and Rust crates are compiled in from source via Cargo / go.mod; the default filter subscription is downloaded at runtime from https://github.com/abclq/home-dns-adblock (MIT), not bundled.
+None as binary. Go modules (jchv/go-webview2, golang.org/x/sys) and Rust crates are compiled in from source via Cargo / go.mod; no third-party filter subscription is bundled or preconfigured; users add their own rule sources at runtime.
 ```
 
 **Does the software modify the system?**

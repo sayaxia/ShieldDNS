@@ -55,7 +55,7 @@ func helperSIDPath() string {
 
 // CurrentUserSID 取当前登录用户的 SID（形如 S-1-5-21-...），用于给管道 ACL 授最小权限
 func CurrentUserSID() string {
-	out, err := runHidden("whoami.exe", "/user", "/fo", "csv", "/nh")
+	out, err := runHidden(sysExe("whoami.exe"), "/user", "/fo", "csv", "/nh")
 	if err != nil {
 		return ""
 	}
@@ -186,6 +186,7 @@ func runHelper() int {
 		helperLog("没有找到授权用户 SID 文件，按当前用户 %s 放行", allowed)
 	}
 	helperLog("后台助手启动，数据目录 %s，授权用户 %s", DataDir(), allowed)
+	go helperGuard()
 	for {
 		h, err := createPipe(allowed)
 		if err != nil {

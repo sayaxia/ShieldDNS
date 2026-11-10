@@ -26,7 +26,7 @@ Windows 本地 DNS 广告拦截应用。**Rust 写 DNS 防护核心**，**Go 写
 | 异常还原保护 | 可选注册计划任务：异常退出/重启后若 127.0.0.1 上没有 DNS 应答，自动还原网卡 DNS |
 | 免 UAC 接管 | 可选安装「后台助手」（SYSTEM 计划任务常驻 + 命名管道）：之后普通权限也能切 53 端口并接管/还原系统 DNS，不再每次弹 UAC |
 | 启动行为 | 应用启动时不自动开启防护、也不主动接管；若上次是接管状态会先把网卡 DNS 还原成原值 |
-| 默认端口 | 新装默认监听 53（Windows 不限制特权端口）；53 被别的程序占用时自动回退 25353 |
+| 默认端口 | 新装默认监听 53（系统解析器只认 53）；53 被占用时启动失败并提示占用进程，不做静默换端口 |
 | 缓存 | 按 `name|qtype` 缓存上游应答，TTL 夹取 10–3600 秒，可设容量上限并定期清理 |
 | 订阅过滤器 | 通过 URL 添加自定义过滤器，可单独开关、立即更新、删除 |
 | 规则自动更新 | 后台每 60 秒心跳，按每个过滤器的 `update_interval_minutes`（默认 720 分钟）判断到期 |
@@ -34,11 +34,11 @@ Windows 本地 DNS 广告拦截应用。**Rust 写 DNS 防护核心**，**Go 写
 | 查询日志 | 记录域名 / 类型 / 处置 / 命中规则 / 客户端 / 耗时，支持搜索与筛选 |
 | 统计 | 查询总数、拦截数、拦截率、缓存命中、拦截 Top 域名、运行时长 |
 | 保护开关 | 一键暂停/恢复，托盘图标同步切换闪电 ↔ 暂停 |
-| DNS 接管 | 两种模式：仅监听 53（不改系统设置）／ 53 + 自动把各网卡 DNS 指向 127.0.0.1（可随时还原） |
+| DNS 接管 | 监听 53 时开启防护即自动把各网卡 DNS 指向 127.0.0.1，关防护/退出自动还原；非 53 端口不接管 |
 | 托盘常驻 | 关闭窗口只收进托盘，程序继续守护核心 |
+| 版本与更新 | 右上角与设置页显示当前版本；「检查更新」查询 GitHub Releases 的最新 tag，有新版本时给出体积与「前往下载」按钮（不自动替换正在运行的 exe） |
 
-内置默认订阅：`https://fastly.jsdelivr.net/gh/abclq/home-dns-adblock@main/dist/adguard-dns-full.txt`
-（来自 [abclq/home-dns-adblock](https://github.com/abclq/home-dns-adblock)，MIT。该仓库 README 明确不要用 `cdn.jsdelivr.net`，此处用的是 `fastly.jsdelivr.net` 镜像；也可换成仓库给出的 `gcore` / `testingcf` 镜像。）
+**发行版不内置任何第三方规则订阅**：程序只提供引擎与订阅管理（URL 添加、定时更新、条数统计），用哪份规则由使用者自己决定。首次安装后规则数为 0，到「过滤订阅 → 添加订阅」填一个自己信任的 AdGuard 语法规则源即可。
 
 ---
 
@@ -51,7 +51,7 @@ ShieldDNS/
 │  ├─ Cargo.toml              发布档：opt-level="z" + lto + strip + panic=abort
 │  └─ src/
 │     ├─ main.rs              启动编排（--config / --version）
-│     ├─ config.rs            配置读写（默认端口 25353 / 控制口 5399 / 面板口 8899）
+│     ├─ config.rs            配置读写（默认端口 53 / 控制口 5399 / 面板口 8899）
 │     ├─ engine.rs            AdGuard 语法过滤引擎
 │     ├─ state.rs             统计、日志、缓存、时间格式化
 │     ├─ dns.rs               UDP/TCP 服务、拦截应答、上游转发、缓存
@@ -113,7 +113,7 @@ webview2\            WebView2 用户数据目录
              ▼                                                                │ 子进程守护
 ┌──────────────────────────────┐      HTTP 127.0.0.1:5399                     │
 │ Rust 核心 (shielddns-core.exe)│ ◀───────────────────────────────────────────┘
-│  · UDP/TCP 监听 127.0.0.1:25353（可切 53）
+│  · UDP/TCP 监听 127.0.0.1:53（唯一能被系统解析命中的端口）
 │  · 过滤引擎（内存） → 拦截则应答 NXDOMAIN/0.0.0.0
 │  · 放行则转发上游（223.5.5.5 / 119.29.29.29 / 1.1.1.1，可改）
 │  · 缓存 + 统计 + 查询日志 + 订阅自动更新
@@ -198,10 +198,10 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 
 1. 从 [Releases](../../releases) 下载 `ShieldDNS-<version>-win-x64.zip`（或 clone 仓库后自行 `build.ps1`）。
 2. 解压到**同一个目录**，确认目录里有 `ShieldDNS.exe` 与 `core\shielddns-core.exe`（两者相对位置不能变）。
-3. 双击 `ShieldDNS.exe`。托盘出现绿盾，面板窗口打开。
-4. 面板首页打开「开启防护」。此时核心已在 `127.0.0.1:53` 应答，本机解析立刻走过滤引擎。
-5. 想让它接管全机（而不是只监听）→ 设置页点「53 端口 + 自动接管」。普通权限会提示需要管理员；点「安装后台助手」一次 UAC，之后长期免弹。
-6. 卸载：托盘「退出」→ 删掉整个目录。若之前注册过计划任务/开机自启，先在设置页点「卸载助手」「注销看门狗」「关闭开机自启」，或手动删除 `ShieldDNS-DNS-Guard`、`ShieldDNS-DNS-Helper` 两个计划任务与 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下的 `ShieldDNS` 值；用户数据在 `%LOCALAPPDATA%\ShieldDNS\`，可直接删。
+3. 双击 `ShieldDNS.exe`。托盘出现绿盾，面板窗口打开；右上角与设置页显示当前版本号，点「检查更新」会去 GitHub 查最新 Release。
+4. 程序**不内置任何规则**，先到「过滤订阅 → 添加订阅」填一个自己信任的 AdGuard 语法规则源（首次更新完成后规则数才会变成非 0）。
+5. 面板首页打开「开启防护」。此时核心已在 `127.0.0.1:53` 应答，本机解析立刻走过滤引擎；端口是 53 时开启防护会自动把网卡 DNS 指向 `127.0.0.1`（普通权限会先用后台助手，没有助手就提示装一次，之后长期免弹 UAC）。
+6. 卸载：托盘「退出」→ 删掉整个目录。若之前注册过计划任务/开机自启，先在设置页点「卸载助手」「关闭开机自启」，或手动删除 `ShieldDNS-DNS-Helper` 计划任务与 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下的 `ShieldDNS` 值；用户数据在 `%LOCALAPPDATA%\ShieldDNS\`，可直接删。
 
 ### 启动流程
 
@@ -211,7 +211,7 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 2. 启动即把 `protection_enabled` 置为 `false` 并落盘 —— **不默认开启防护**，也不主动接管系统 DNS。
 3. 若检测到上次是接管状态（`dns_backup.json` 存在），先把各网卡 DNS 还原成原值，再继续启动。
 4. 面板 HTTP 从 `panel_port`（默认 8899）起连续试 15 个端口，占用则顺延。
-5. 拉起核心（带 `--config`），最多轮询 40×250 ms 等 `/api/health` 就绪；若 53 被别的程序占住，自动退到 25353 并把 `dns_mode` 记成 `custom`。
+5. 拉起核心（带 `--config`），最多轮询 40×250 ms 等 `/api/health` 就绪；若 53 被别的程序占住，核心直接以 `exit(2)` 退出，面板改为在顶部提示条里给出占用者信息 + 一键结束进程重试（不会自动换端口）。
 6. 清理上一轮残留的可执行镜像（`ShieldDNS.exe~`）。
 7. 弹出 WebView2 窗口（1220×820，居中，标题「ShieldDNS · DNS 广告拦截」）。
 8. 托盘图标常驻：绿盾=保护开启，暂停版=保护关闭。
@@ -226,41 +226,66 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 
 > 从命令行以 `-WindowStyle Hidden` 之类方式启动时，Windows 会用启动参数覆盖第一次 `ShowWindow`，窗口可能不显示也不绘制页面。正常双击/普通启动不受影响。
 
+### 版本号与检查更新
+
+* 版本号只有一个来源：`panel/version.go` 里的 `appVersion`（当前 `0.1.0`）。界面右上角 chip、设置页「版本」行、`/system/info` 都读它；核心侧 `Cargo.toml` 的版本同步即可。
+* 「检查更新」走 `GET /system/update`：请求 `https://api.github.com/repos/sayaxia/ShieldDNS/releases/latest`，比对 tag（如 `v0.1.1`）与本地版本，按数字分段比较（`0.1.0` vs `0.1.1`、`0.10.0` 都能正确排序）。
+* 结果里带 `releaseURL`、`downloadURL`（优先 `*win-x64*.zip` 资产）与资产体积；有新版时界面把「前往下载」按钮放出来，点它由面板后端用系统默认浏览器打开 Release 页（`POST /system/openrelease`，只放行本仓库链接）。
+* **不做自替换**：exe 正在运行，自己覆盖自己必然失败；先退出程序再解压新包是更稳的做法，也避免半截更新把程序搞坏。
+* 结果缓存 10 分钟（`?force=1` 跳过），界面启动时静默查一次，只把结论写进设置页，不弹 toast。
+
 ---
 
-## 7. 两种 DNS 模式
+## 7. 端口、接管与上游
 
-默认监听 **`127.0.0.1:53`**。Windows 没有「特权端口」限制，普通权限就能绑 53 并应答；**只有修改网卡 DNS 才需要管理员**。所以「只监听 53」与「53 + 接管」是两件事，可以分开选。
+默认监听 **`127.0.0.1:53`**，并且**不做任何静默换端口**。
 
-53 被别的程序占用时（IIS、Docker、AdGuard Home、其它 DNS 工具等）程序会自动退到 `25353`，并把模式记成 `custom`，面板会提示实际端口。
+原因很简单：Windows 网卡 DNS 只能填 IP、带不了端口，系统解析器和浏览器默认都打 53。监听 25353 时，只有 `nslookup -port=25353` 这类显式指定端口的客户端才会命中，日常上网完全绕过；而 `netsh portproxy` 做转发本身又得先占住 53，绕回同一个问题。所以「默认 53、绑不上就明确失败」才是唯一诚实的做法。
 
-### 模式 A：自定义端口（`dns_mode = "custom"`）
+### 53 被占用时
 
-* 核心监听 `127.0.0.1:<listen_port>`，默认 53，回退时是 25353。
-* 不改系统设置，不需要管理员权限。
-* 想让它生效，需要把要防护的设备/应用把 DNS 指向本机该端口（或做端口转发 / 路由器转发）。
-* 适合「只防护本机某个程序」「路由器把 53 转发到本机 25353」「不想动系统配置」。
+（IIS、Docker、AdGuard Home、其它 DNS 工具等）核心会直接启动失败，`core.log` 里留下：
 
-### 模式 B：53 端口 + 自动接管系统 DNS（`dns_mode = "system"`）
+```
+[core] DNS 服务启动失败: 127.0.0.1:53 被占用：通常每个套接字地址(协议/网络地址/端口)只允许使用一次。 (os error 10048)
+```
 
-在面板「设置 → DNS 模式」里切换到该模式后，面板会：
+面板顶部随即弹出黄色提示条，写明**占用者进程名 + PID + 完整路径**，并提供两颗按钮：
 
-1. 校验权限：管理员直接干；非管理员但有后台助手在跑 → 走命名管道交给助手；两者都没有 → 提示需要管理员（或先装助手）。**不再必然弹 UAC。**
-2. 先把核心端口改成 53（`listen_address` 仍为 `127.0.0.1`）。
-3. 还原此前接管过的网卡 DNS，避免旧配置残留。
-4. 重启核心使其监听 53，并校验 `/api/health` 返回的 `pid` 确实是本次拉起的子进程（防止「旧核心还在应答」的假成功）。
-5. 遍历所有网卡，把当前 DNS 记录进 `dns_backup.json`，再 `Set-DnsClientServerAddress` 指向 `127.0.0.1`，最后 `Clear-DnsClientCache`。
+* **结束占用进程并重试**：`port_windows.go` 用 `TerminateProcess` 结束它，然后 `core.Stop() + Start()` 重启核心；成功后提示条自动收起。`svchost / system / services / lsass / wininit / winlogon / smss / dwm` 这类关键进程会被拒绝，提示你手动停对应服务或换端口。
+* **稍后处理**：只关掉这条提示，不做事。
 
-面板「设置 → 系统 DNS 接管」还有独立的**接管 / 还原**按钮，可单独操作；还原时逐项写回原 DNS，原本是 DHCP 自动获取的网卡用 `-ResetServerAddresses` 还原，随后清空 DNS 缓存。
+判定做了双保险：先解析 `netstat -ano` 的 UDP + TCP LISTENING 行拿 PID，再真做一次 UDP `bind` 复核；结束后同样两项都复核一次才算释放（并排除面板自身与当前核心 PID，避免把自己当成占用者）。
 
-> 注意：接管会**改动系统网络配置**。切回模式 A 前建议先点一次「还原 DNS」；即使忘了，重启程序时会自动还原，装了看门狗的话异常退出也能兜底。
+### 接管：端口是 53 就自动接管
 
-### 上游：跟随本机 DNS
+界面上不再有「DNS 运行模式」这个选项，因为语义已经合并成一句：
 
-面板「设置 → 上游 DNS」有两种模式：
+* **端口 = 53** → 开启防护时自动接管：备份每块网卡的现有 DNS → `Set-DnsClientServerAddress` 指向 `127.0.0.1` → `Clear-DnsClientCache`，记录写进 `dns_backup.json`。
+* **关防护 / 退出程序** → 自动还原（原本 DHCP 自动获取的网卡用 `-ResetServerAddresses` 复原）。
+* 权限：管理员直接改；普通权限但有后台助手在跑 → 走命名管道交给 SYSTEM 助手，**不弹 UAC**；两者都没有 -> 提示先装一次助手。
 
-* **自定义上游**：直接用你填写的列表，行为固定。
-* **跟随本机 DNS**：在「开启防护 / 接管系统 DNS」之前，先枚举本机各网卡当前 DNS，写进上游列表；之后再接管就沿用这份值，不会因为网卡 DNS 被改成 `127.0.0.1` 而把查询转回自己（成环）。
+所以设置页不再需要「系统 DNS 接管」那张卡片，也不再需要「接管 / 还原」按钮。
+
+### 自定义端口（高级用法）
+
+「监听端口」输入框仍然接受 1–65535。填非 53 时不会接管系统 DNS，只有你显式把设备 / 应用 / 路由器的 DNS 指到这个端口才会经过 ShieldDNS——留给「只防护某个程序」「路由器转发进来」这类场景。
+
+### 上游：一个勾选框
+
+* **不勾「使用自定义上游」**（默认）：跟随本机 DNS。开启防护 / 保存设置前枚举网卡现有 DNS，过滤 `127.*`、`::1`、`0.0.0.0`、`255.255.255.255` 与自身监听地址（避免解析成环），去重补 `:53`，最多 4 个。
+* **勾上**：只用手填的列表，行为固定、可复现。
+
+两种模式都会把保存的**公共 DNS 追加在后面做兜底**：路由器 DNS 偶发超时或开机冷启动时，核心按顺序重试下一个，不至于整条解析失败。读不到任何本机 DNS 时直接回退自定义列表，并在界面上标注「未取到本机 DNS，已回退备用上游」。
+
+### 守护：合并进后台助手
+
+后台助手（SYSTEM 身份常驻）每 30 秒自查一次，取代原先单独的看门狗计划任务：
+
+1. 防护开着、端口是 53，但系统 DNS 没指向 `127.0.0.1`（被 VPN 或手动改掉）→ 补回接管。
+2. 接管记录还在，但 `127.0.0.1` 连续 4 次没有 DNS 应答（核心崩溃且没重启成功）→ 还原系统 DNS，避免全机断网。
+
+核心正常应答时它什么都不做，重复检查无害。安装助手那一次仍需要管理员（会弹一次 UAC），之后长期免弹。
 
 实现细节（`dns_windows.go` + `server.go`）：
 
@@ -272,29 +297,24 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 
 需要注意：本机上游若是路由器（如 `192.168.100.1`），路由器的家长控制/广告过滤会先过一遍；公共 DNS 兜底只在前面全部超时时才用，不会“抢答”。
 
-### 异常还原保护（看门狗）
+### 异常还原保护（已并入后台助手）
 
-场景：`dns_mode=system` 接管后，网卡 DNS 是 `127.0.0.1`。如果面板/核心被强杀、或直接断电重启而核心没起来，全机就没有 DNS 了。看门狗负责兜住这件事。
+场景：接管后网卡 DNS 是 `127.0.0.1`。如果面板/核心被强杀、或断电重启后核心没起来，全机就没有 DNS 了。
 
-**判定逻辑**：只有当「某块网卡的 DNS 仍指向 `127.0.0.1`」**且**「向 `127.0.0.1:<listen_port>` 发一次真实 A 查询、2 秒内没有应答」时，才按 `dns_backup.json` 还原。核心正常应答时它什么都不做 —— 幂等，重复触发无害，所以**正常退出不需要注销任务**，注销失败也不会误伤。
+这件事现在由**后台助手常驻守护**完成，不再需要单独注册一个看门狗计划任务，设置页也没有对应的卡片：
 
-**注册形态**（面板「设置 → 异常还原保护」）：
-
-* 计划任务名 `ShieldDNS-DNS-Guard`，`SYSTEM` 身份（开机还没人登录时也能跑）。
-* 触发不再只靠固定秒数：开机后 20 秒、登录后 10 秒各一次；Windows 判定「网络已连接」时（`Microsoft-Windows-NetworkProfile/Operational` 事件 10000，延迟 5 秒）立刻兜一次；登录后每 15 分钟复查一次。执行时限 5 分钟。
-* 任务动作是 `<exe> -watchdog -data "<数据目录>"`。**`-data` 是必需的**：SYSTEM 身份下 `%LOCALAPPDATA%` 指向 `systemprofile`，不带这个参数就读不到用户的 `config.json` 和 `dns_backup.json`，会误判成「没有接管记录」直接跳过。
-* 设置页有「立即测试」按钮，等于手动 `schtasks /Run` 跑一次，结果同样写日志。
-* 看门狗还会顺手自愈：若后台助手任务装了但管道连不上，它用 SYSTEM 权限把助手重新拉起来（`schtasks /Run`），普通用户不必为「重启助手」再弹 UAC。
-* 需要管理员权限注册；成功后状态显示「已注册」，注销同样需要管理员。
-* 日志独立写在 `logs\watchdog.log`，每次运行都留一行结论（跳过原因或还原结果）。
-
-**启动自检**：面板启动时若发现「仍有接管记录 + 当前无应答」，只写日志不擅自动网卡（因为紧接着核心就会启动并重新接管，此时还原反而造成抖动）。
+* 助手每 30 秒查一次：防护开着、端口 53，但系统 DNS 没指向 `127.0.0.1` → 补回接管（VPN、手动改动会被自动纠正）。
+* 接管记录还在，但 `127.0.0.1` 连续 4 次真实 A 查询（2 秒超时）都没应答 → 按 `dns_backup.json` 还原系统 DNS，避免全机断网。
+* 核心正常应答时什么都不做，重复检查无害；结论写进 `logs\helper.log`，前缀为「守护：」。
 
 **边界**：
 
-* 备份文件被清理 → 无备份可还原，看门狗保持不动（不会瞎改 DNS），需要手动改回自动获取。
-* 若企业策略/安全软件禁止创建 SYSTEM 计划任务，注册会失败并给出错误；此时只能手动还原。
-* 实测覆盖（本机，管理员会话）：`schtasks /Run` 拉起 SYSTEM 任务 → 核心正常时记「有 DNS 应答，跳过」；把配置里的监听端口临时改成一个没人答的端口、网卡仍指向 `127.0.0.1` → 记「已还原系统 DNS（异常退出 / 重启兜底）」，两块网卡 DNS 从 `127.0.0.1` 变回 `192.168.100.1` / `114.114.114.114`。
+* 备份文件被清理 → 无备份可还原，守护保持不动（不会瞎改 DNS），需要手动改回自动获取。
+* 助手没装（或没在跑）→ 没有守护；此时异常退出只能手动还原，或重新启动面板让核心把解析接回来。
+
+> 兼容说明：`<exe> -watchdog -data "<数据目录>"` 入口和 `ShieldDNS-DNS-Guard` 任务的代码仍然保留（老用户机器上已注册的任务继续可用，`logs\watchdog.log` 仍会记录），但产品里不再提示安装、也不再自动注册。
+
+**启动自检**：面板启动时若发现「仍有接管记录 + 当前无应答」，只写日志不擅自动网卡（因为紧接着核心就会启动并重新接管，此时还原反而造成抖动）。
 
 ### 后台助手（免 UAC 接管系统 DNS）
 
@@ -308,10 +328,10 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 * 安装（设置页「后台助手」→ 安装后台助手）需要一次 UAC；装完立刻 `schtasks /Run` 拉起并 `ping` 校验，之后开机自启、随用随连**全程零弹窗**。卸载同理只需一次提权。
 * 日志写在 `logs\helper.log`（每次动作一行，含 ok/错误/detail）。
 * 实测（本机）：`admin=false` 的普通实例设置 `listen_port=53, dns_mode=system` → 返回 `ok:true`，两块网卡变成 `127.0.0.1`，`127.0.0.1:53` 解析正常，`1rtb.com` NXDOMAIN 拦截生效；关掉防护开关 → 自动还原成 `192.168.100.1` / `114.114.114.114`。
-* **助手自己挂掉怎么办**：看门狗（SYSTEM，每 15 分钟一次 + 开机/登录/网络就绪）顺带检查一次管道，发现「任务在、管道连不上」就用 `schtasks /Run` 把助手拉起来，不需要用户再点一次 UAC。面板侧不自动重启助手，只显示状态。
+* **助手自己挂掉怎么办**：面板侧不自动重启助手，只显示状态；助理由计划任务 BootTrigger 开机拉起，设置页「重启」按钮等于 `schtasks /Run` 一次，不需要重新弹 UAC。
 * **普通权限怎么看任务装没装**：`schtasks /Query` 查 SYSTEM 任务会返回「拒绝访问」，这本身就是"任务存在"的证据（不存在时报的是"找不到"），面板据此显示「已安装」。所以看到「已安装·未运行」再点一次「重启助手」即可。
 
-**启动行为**：应用启动时一律 `protection_enabled=false`，不自动接管；如果检测到上次是接管状态（`dns_backup.json` 还在），会先把网卡 DNS 还原（有提权用提权，没提权用助手），避免「程序开着但没开防护、解析却挂在 127.0.0.1」。默认端口 53，若 53 被别的程序占用会自动回退 25353 并在界面上体现。
+**启动行为**：应用启动时一律 `protection_enabled=false`，不自动接管；如果检测到上次是接管状态（`dns_backup.json` 还在），会先把网卡 DNS 还原（有提权用提权，没提权用助手），避免「程序开着但没开防护、解析却挂在 127.0.0.1」。默认端口 53；53 被占用时启动失败，由面板顶部提示条告知占用进程并支持一键结束重试（不再自动回退）。
 
 ---
 
@@ -333,7 +353,7 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 | 单段无点规则（如 `ads`） | ❌ 丢弃 | 避免误杀 |
 | 元素隐藏 `##`、脚本 `#%#` | ❌ 忽略 | DNS 层不涉及页面元素 |
 
-拦截时直接返回 **NXDOMAIN**（默认），也可在设置里切成 `zero`（应答 `0.0.0.0` / `::`）。白名单命中即放行，用于保护正片/登录/支付等正常访问——这套策略与 `home-dns-adblock` 仓库「命中即 NXDOMAIN、精确规则优先、禁裸域宽泛规则」的思路一致。
+拦截时直接返回 **NXDOMAIN**（默认），也可在设置里切成 `zero`（应答 `0.0.0.0` / `::`）。白名单命中即放行，用于保护正片/登录/支付等正常访问——策略是「精确规则优先、命中即 NXDOMAIN、白名单放行」，不放宽到整个裸域。
 
 ---
 
@@ -366,22 +386,7 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
   "cache_enabled": true,
   "log_queries": true,
   "max_log_entries": 500,
-  "filters": [
-    {
-      "id": "abclq",
-      "name": "home-dns-adblock（红果/番茄等国内 App）",
-      "url": "https://fastly.jsdelivr.net/gh/abclq/home-dns-adblock@main/dist/adguard-dns-full.txt",
-      "enabled": true,
-      "auto_update": true,
-      "update_interval_minutes": 720,
-      "last_update": "2026-11-10 12:14:23",
-      "last_update_ts": 1794284063,
-      "last_error": null,
-      "rule_count": 1011,
-      "builtin": true,
-      "kind": "subscription"
-    }
-  ],
+  "filters": [],
   "custom_rules": ["||ads.example.com^"],
   "panel_port": 8899,
   "dns_mode": "system",
@@ -391,17 +396,17 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 
 字段说明：
 
-* `listen_address` / `listen_port`：DNS 监听地址与端口（新装默认 `127.0.0.1:53`，53 占用时回退 25353）。
+* `listen_address` / `listen_port`：DNS 监听地址与端口（新装默认 `127.0.0.1:53`；53 被占用时不会自动换端口，而是启动失败并提示占用者）。
 * `control_port`：核心控制 API 端口（默认 5399，只绑 127.0.0.1）。
 * `block_mode`：`nxdomain` 或 `zero`。
 * `upstreams`：实际生效的上游，按顺序重试；面板里每行一个（自定义模式下就是用户填的）。
-* `upstream_mode`：`custom` = 只用 `custom_upstreams`；`system` = 按本机 DNS 抓取（含兜底）。
+* `upstream_mode`：设置页那颗「使用自定义上游」勾选框的落点——勾上 = `custom`（只用 `custom_upstreams`）；不勾 = `system`（按本机 DNS 抓取，含公共 DNS 兜底）。
 * `custom_upstreams`：用户保存的自定义/备用上游，切回自定义模式时用它。
 * `upstream_source` / `upstream_captured_at`：上次抓取来源与时间，面板上展示，便于确认“抓的到底是谁”。
 * `cache_size` / `cache_enabled` / `max_log_entries`：缓存与日志容量。
-* `filters[]`：订阅列表；`builtin` 表示内置默认订阅，`kind=subscription`。
+* `filters[]`：订阅列表，新装为空；添加订阅后每项含 `url` / `enabled` / `auto_update` / `interval` / `rule_count` / `kind=subscription`。
 * `custom_rules[]`：面板里手写的规则。
-* `panel_port` / `dns_mode` / `auto_start`：面板专属（`custom` = 非 53 端口；`system` = 53 + 接管）。
+* `panel_port` / `dns_mode` / `auto_start`：面板专属。`dns_mode` 已经不再由用户选择，而是按端口推导：`listen_port == 53` → `system`（自动接管），其它端口 → `custom`；保留该字段只为兼容旧配置与日志。`auto_start` 对应设置页「开机自动启动」。
 
 核心也接受 `--config <path>` 指定其它配置文件，`--version` 打印版本。
 
@@ -441,12 +446,14 @@ cd panel; & <mingw64\bin>\windres.exe -I . -i app.rc -O coff -o app.syso
 | --- | --- | --- |
 | GET | `/system/info` | 管理员状态、网卡列表、端口、核心是否运行、WebView 是否可用 |
 | POST | `/system/protection` | 开关保护并同步托盘图标 |
-| POST | `/system/settings` | 保存端口 / 上游 / 拦截模式 / DNS 模式（必要时重启核心、接管或还原） |
-| POST | `/system/takeover`、`/system/release` | 接管 / 还原系统 DNS |
-| POST | `/system/upstreams` | `{"action":"capture"}` 重新读取本机 DNS 作为上游（仅 system 模式） |
-| GET/POST | `/system/guard` | 查询/注册/注销/手动触发看门狗任务（`{"action":"register"|"unregister"|"run"}`，需管理员） |
+| POST | `/system/settings` | 保存端口 / 上游 / 拦截模式（`dns_mode` 由端口推导，必要时重启核心、接管或还原） |
+| POST | `/system/takeover`、`/system/release` | 手动接管 / 还原系统 DNS（界面已不再调用，正常流程由开/关防护触发） |
+| POST | `/system/upstreams` | `{"action":"capture"}` 重新读取本机 DNS 作为上游 |
+| GET/POST | `/system/guard` | 老接口：查询/注册/注销/手动触发看门狗任务（界面已移除，守护职责并入后台助手） |
 | GET/POST | `/system/helper` | 后台助手：GET 返回 `{installed,running,admin}`；POST `{"action":"register"|"unregister"|"start"}`（注册/卸载需管理员，一步一次 UAC） |
 | POST | `/system/autostart` | `{"enabled":bool}` 设置开机自启（写 `HKCU\...\Run`，无需管理员） |
+| GET | `/system/update` | 检查 GitHub Releases 最新版本（`?force=1` 跳过 10 分钟缓存），返回 `{ok,current,latest,hasUpdate,releaseURL,downloadURL,error}` |
+| POST | `/system/openrelease` | `{"url":"https://github.com/sayaxia/ShieldDNS/..."}` 用系统默认浏览器打开下载页（只放行本仓库链接） |
 | POST | `/system/elevate` | UAC 提权重启面板 |
 | POST | `/system/restart`、`/system/quit` | 重启 / 退出 |
 
@@ -472,7 +479,7 @@ python scripts\verify_core.py 53 5399
   1rtb.com               -> NXDOMAIN answers=0
 ```
 
-首次拉取默认订阅的日志：`过滤器 abclq 更新完成，共 1011 条规则`。
+拉取订阅成功的日志示例：`过滤器 <id> 更新完成，共 N 条规则`（条数取决于你选的规则源）。
 
 ---
 
@@ -502,7 +509,7 @@ python scripts\verify_core.py 53 5399
 * **本机上游的可用性**：跟随本机 DNS 时，首个上游常见是路由器。实测出现过「路由器 DNS 首次查询超时」：核心此时会按顺序重试后续上游（已把自定义公共 DNS 自动追加为兜底），单个上游 UDP 超时 2s。若路由器长期不稳定，建议仍用自定义上游。
 * **看门狗未注册时**：接管状态下异常退出/重启，网卡会一直指向 `127.0.0.1`，表现为「网页打不开、提示 DNS 错误」。此时要么重新启动面板（核心一起来就恢复解析），要么在设置页点「还原系统 DNS」，或直接手动把网卡 DNS 改回自动获取。
 * **接管按钮提示需要管理员权限**：说明既没提权、后台助手也没装（或没在跑）。装一次助手即可长期免弹；`logs\helper.log` 里没有新行就是助手没起来，点「重启助手」。
-* **选「53 端口 + 自动接管」后又被改回 25353**：旧版设置页每 2 秒轮询一次，会把还没保存的编辑用服务器旧值覆盖。现在只要动过端口/模式/上游（未点「应用设置」）就加脏标记，轮询只更新状态、不回写表单；保存成功才清标记。若点应用后弹「需要管理员权限」，说明当前实例没提权，点右下角「以管理员身份重启」再来。
+* **设置页里改完的端口又被改回旧值**：旧版设置页每 2 秒轮询一次，会把还没保存的编辑用服务器旧值覆盖。现在只要动过端口/模式/上游（未点「应用设置」）就加脏标记，轮询只更新状态、不回写表单；保存成功才清标记。若点应用后弹「需要管理员权限」，说明当前实例没提权，点右下角「以管理员身份重启」再来。
 * **旧进程残留**：曾出现旧版 DNS 程序占用端口导致「过滤失效」的假象，排查时用 `Get-NetTCPConnection -LocalPort <port>` 看所属 PID，别只看进程名。
 * **切到 53 后仍然没有解析**：核心启动时会先杀掉上一轮遗留的 `shielddns-core.exe`，并校验 `/api/health` 返回的 `pid` 必须是本次拉起的子进程——不再出现「旧核心在应答、新核心根本没起来」的假成功。确认可用 `Get-NetUDPEndpoint -LocalPort 53` 看归属，或看 `/system/info` 的 `coreRunning` / `coreError`。
 
@@ -511,7 +518,7 @@ python scripts\verify_core.py 53 5399
 ## 15. 许可证与致谢
 
 * 本项目代码：[MIT](LICENSE)。
-* 规则来源：[abclq/home-dns-adblock](https://github.com/abclq/home-dns-adblock)（MIT），精确规则 + 上游规则合并，命中即 NXDOMAIN，白名单保护正片。
+* 规则：本项目不内置、也不分发任何第三方规则源；用哪份规则由使用者自行添加并遵守对应源的许可。
 * Go 面板依赖：[jchv/go-webview2](https://github.com/jchv/go-webview2)（MIT）、`golang.org/x/sys`。
 * 图标为本项目自制（AI 生成母版 + 脚本后处理）。
 
@@ -530,15 +537,16 @@ python scripts\verify_core.py 53 5399
 **面板（Go + WebView2）**
 
 * 内嵌单页 UI、系统托盘、绿盾/暂停双图标、关窗进托盘。
-* 两种 DNS 模式；「跟随本机 DNS」上游（接管前取值 + 公共 DNS 兜底）。
-* 看门狗计划任务（`ShieldDNS-DNS-Guard`）：按「在线事件」触发，判定标准是「网卡仍指向 127.0.0.1 且该端口无真实应答」。
-* 后台助手（`ShieldDNS-DNS-Helper`）：SYSTEM 常驻 + 命名管道，普通权限即可切 53 / 接管 / 还原，装一次 UAC 后长期免弹。
+* 端口决定接管语义：53 = 开防护即自动接管、关防护自动还原；非 53 只做定向监听。不再有「DNS 运行模式」选项。
+* 上游：单勾选框（勾上=自定义列表，不勾=跟随本机 DNS，接管前取值 + 公共 DNS 兜底）。
+* 后台助手（`ShieldDNS-DNS-Helper`）：SYSTEM 常驻 + 命名管道，普通权限即可切 53 / 接管 / 还原，装一次 UAC 后长期免弹；同时每 30 秒自查（漏接管补回、核心失联 4 次还原系统 DNS），原「看门狗」职责已并入这里。
+* 版本与更新：界面显示版本号，一键查询 GitHub Releases 最新 tag，有新版本给下载入口。
 
 **本版本修掉的问题**
 
 * 提权重启后弹「已有实例」：旧实例 1.2s 才释放互斥体 → 改为先 `releaseSingleInstance()` 再退出，新实例按 deadline 重试（提权 15s / 普通 1.5s）。
 * 提权后切 53「假成功」：孤儿核心仍在应答 `/api/health` → 健康检查增加 `pid` 校验，并清理镜像名不符的残留进程。
-* 点 53 端口跳回 25353：设置页轮询把未保存编辑用旧值回写 → 加脏标记，保存成功才清。
+* 设置页里填的端口被轮询改回旧值：旧版每 2s 回写表单 → 加脏标记，保存成功才清。
 * 退出卡死：`quit()` 里托盘/WebView 清理偶尔卡消息循环 → 2.5s 兜底 `os.Exit`，退出前先还原系统 DNS。
 * 任务存在性误判：普通权限 `schtasks /Query` 查 SYSTEM 任务返回「拒绝访问」被当成「未安装」→ 把「拒绝访问」视为存在，并兼容中文系统 GBK 报错字节。
 * UI 缩放变形：标签被压成竖排、列互相挤压 → 标签 `nowrap`、表格 `min-width` + 内部横向滚动、长域名省略号。

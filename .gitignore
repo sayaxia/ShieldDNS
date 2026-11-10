@@ -4,6 +4,9 @@ panel/dist/
 core/target/
 panel/app.syso
 
+# 本地打包验证目录（不随仓库提交）
+out/
+
 # 依赖缓存（vendor 例外，需要随仓库带走）
 panel/vendor/modules.txt.bak
 

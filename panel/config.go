@@ -45,7 +45,8 @@ type Config struct {
 	UpstreamCapturedAt string   `json:"upstream_captured_at"`
 }
 
-const defaultSubscription = "https://fastly.jsdelivr.net/gh/abclq/home-dns-adblock@main/dist/adguard-dns-full.txt"
+// 不再内置任何第三方规则订阅：本程序只提供引擎与订阅管理能力，
+// 具体规则由用户自己添加（各家规则源有自己的授权与更新节奏，内置在发行包里不合适）。
 
 func DataDir() string {
 	if dir := os.Getenv("SHIELDDNS_DATA_DIR"); dir != "" {
@@ -83,16 +84,7 @@ func defaultConfig() *Config {
 		PanelPort:         8899,
 		DNSMode:           "custom",
 		AutoStart:         true,
-		Filters: []FilterConfig{{
-			ID:                    "abclq",
-			Name:                  "home-dns-adblock（红果/番茄等国内 App）",
-			URL:                   defaultSubscription,
-			Enabled:               true,
-			AutoUpdate:            true,
-			UpdateIntervalMinutes: 720,
-			Builtin:               true,
-			Kind:                  "subscription",
-		}},
+		Filters: []FilterConfig{},
 		CustomRules: []string{
 			"! 自定义规则示例（AdGuard 语法，一行一条）",
 			"! ||ads.example.com^",
@@ -112,7 +104,11 @@ func loadConfig() *Config {
 	if cfg.PanelPort == 0 {
 		cfg.PanelPort = 8899
 	}
-	if cfg.DNSMode == "" {
+	// dns_mode 不再由用户选择：端口是 53 就自动接管，其它端口就只管本机定向查询。
+	// 保留这个字段只是为了兼容旧配置和日志。
+	if cfg.ListenPort == 53 {
+		cfg.DNSMode = "system"
+	} else {
 		cfg.DNSMode = "custom"
 	}
 	if cfg.UpstreamMode != "system" {

@@ -128,14 +128,14 @@ func createTaskFromXML(name, xmlBody string) error {
 		return err
 	}
 	defer os.Remove(path)
-	_, err := runHidden("schtasks.exe", "/Create", "/TN", name, "/XML", path, "/F")
+	_, err := runHidden(sysExe("schtasks.exe"), "/Create", "/TN", name, "/XML", path, "/F")
 	return err
 }
 
 // taskExists 问任务计划程序。SYSTEM 任务对普通权限会话是「看得见但打不开」：
 // 查询会返回 Access is denied，这本身就是"任务存在"的证据（不存在时报的是"找不到"）。
 func taskExists(name string) bool {
-	_, err := runHidden("schtasks.exe", "/Query", "/TN", name)
+	_, err := runHidden(sysExe("schtasks.exe"), "/Query", "/TN", name)
 	if err == nil {
 		return true
 	}
@@ -176,7 +176,7 @@ func RunGuardTask() error {
 	if !GuardTaskRegistered() {
 		return errors.New("看门狗任务还没注册")
 	}
-	_, err := runHidden("schtasks.exe", "/Run", "/TN", guardTaskName)
+	_, err := runHidden(sysExe("schtasks.exe"), "/Run", "/TN", guardTaskName)
 	return err
 }
 
@@ -184,7 +184,7 @@ func UnregisterGuardTask() error {
 	if !IsAdmin() {
 		return errors.New("注销看门狗任务需要管理员权限")
 	}
-	_, err := runHidden("schtasks.exe", "/Delete", "/TN", guardTaskName, "/F")
+	_, err := runHidden(sysExe("schtasks.exe"), "/Delete", "/TN", guardTaskName, "/F")
 	if err != nil && GuardTaskRegistered() {
 		return err
 	}
@@ -269,7 +269,7 @@ func RegisterHelperTask() error {
 	if !HelperTaskRegistered() {
 		return errors.New("任务已提交但查询不到，可能被组策略拦截")
 	}
-	_, _ = runHidden("schtasks.exe", "/Run", "/TN", helperTaskName)
+	_, _ = runHidden(sysExe("schtasks.exe"), "/Run", "/TN", helperTaskName)
 	time.Sleep(1500 * time.Millisecond)
 	if !HelperRunning() {
 		return errors.New("任务已注册，但后台助手没有连上命名管道，请稍后点『重启助手』")
@@ -281,7 +281,7 @@ func RunHelperTask() error {
 	if !HelperTaskRegistered() {
 		return errors.New("后台助手还没安装")
 	}
-	_, err := runHidden("schtasks.exe", "/Run", "/TN", helperTaskName)
+	_, err := runHidden(sysExe("schtasks.exe"), "/Run", "/TN", helperTaskName)
 	return err
 }
 
@@ -289,9 +289,9 @@ func UnregisterHelperTask() error {
 	if !IsAdmin() {
 		return errors.New("卸载后台助手需要管理员权限")
 	}
-	_, err := runHidden("schtasks.exe", "/End", "/TN", helperTaskName)
+	_, err := runHidden(sysExe("schtasks.exe"), "/End", "/TN", helperTaskName)
 	_ = err // 没在跑时 /End 会报错，忽略
-	if _, err := runHidden("schtasks.exe", "/Delete", "/TN", helperTaskName, "/F"); err != nil && HelperTaskRegistered() {
+	if _, err := runHidden(sysExe("schtasks.exe"), "/Delete", "/TN", helperTaskName, "/F"); err != nil && HelperTaskRegistered() {
 		return err
 	}
 	_ = os.Remove(helperSIDPath())
@@ -299,7 +299,7 @@ func UnregisterHelperTask() error {
 }
 
 func AutoStartEnabled() bool {
-	_, err := runHidden("reg.exe", "query", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", autoRunValue)
+	_, err := runHidden(sysExe("reg.exe"), "query", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", autoRunValue)
 	return err == nil
 }
 
@@ -309,11 +309,11 @@ func SetAutoStart(enabled bool) error {
 		return err
 	}
 	if enabled {
-		_, err = runHidden("reg.exe", "add", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+		_, err = runHidden(sysExe("reg.exe"), "add", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
 			"/v", autoRunValue, "/t", "REG_SZ", "/d", `"`+exe+`"`, "/f")
 		return err
 	}
-	_, err = runHidden("reg.exe", "delete", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+	_, err = runHidden(sysExe("reg.exe"), "delete", `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
 		"/v", autoRunValue, "/f")
 	if err != nil && !AutoStartEnabled() {
 		return nil // 本来就不存在，视为成功

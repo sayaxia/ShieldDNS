@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_SUBSCRIPTION: &str =
-    "https://fastly.jsdelivr.net/gh/abclq/home-dns-adblock@main/dist/adguard-dns-full.txt";
+// 发行版不内置任何第三方规则订阅：规则由用户自行在面板里添加，
+// 本程序只负责下载、解析、匹配。
 
 fn default_true() -> bool {
     true
@@ -11,9 +11,9 @@ fn default_listen() -> String {
     "127.0.0.1".to_string()
 }
 fn default_port() -> u16 {
-    // Windows 上 UDP 5353 被 mDNS/DNS-SD (svchost) 占用，15353 也可能被其它 DNS 工具抢占，
-    // 默认使用 25353；面板里可改 53 / 任意端口
-    25353
+    // DNS 只有 53 才能被系统解析器命中（Windows 网卡 DNS 不能带端口），
+    // 所以默认就是 53；绑不上直接失败，由面板提示占用者，不做静默回退。
+    53
 }
 fn default_control_port() -> u16 {
     5399
@@ -136,20 +136,7 @@ impl Default for Config {
             cache_enabled: true,
             log_queries: true,
             max_log_entries: default_log_max(),
-            filters: vec![FilterConfig {
-                id: "abclq".to_string(),
-                name: "home-dns-adblock（红果/番茄等国内 App）".to_string(),
-                url: DEFAULT_SUBSCRIPTION.to_string(),
-                enabled: true,
-                auto_update: true,
-                update_interval_minutes: 720,
-                last_update: None,
-                last_update_ts: 0,
-                last_error: None,
-                rule_count: 0,
-                builtin: true,
-                kind: "subscription".to_string(),
-            }],
+            filters: Vec::new(),
             custom_rules: vec![
                 "! 自定义规则示例（AdGuard 语法，一行一条）".to_string(),
                 "! ||ads.example.com^".to_string(),

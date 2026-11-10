@@ -139,7 +139,7 @@ func healthPid() (uint32, bool) {
 }
 
 func isOurCoreImage(pid uint32) bool {
-	out, err := runHidden("tasklist.exe", "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH")
+	out, err := runHidden(sysExe("tasklist.exe"), "/FI", fmt.Sprintf("PID eq %d", pid), "/FO", "CSV", "/NH")
 	if err != nil || out == "" {
 		return false
 	}
@@ -158,7 +158,7 @@ func (m *CoreManager) clearStaleLocked() {
 	if !isOurCoreImage(pid) {
 		return
 	}
-	_, _ = runHidden("taskkill.exe", "/PID", fmt.Sprintf("%d", pid), "/F")
+	_, _ = runHidden(sysExe("taskkill.exe"), "/PID", fmt.Sprintf("%d", pid), "/F")
 	for i := 0; i < 12; i++ {
 		if _, alive := healthPid(); !alive {
 			return
