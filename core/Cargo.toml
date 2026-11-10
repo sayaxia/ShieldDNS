@@ -1,6 +1,6 @@
 [package]
 name = "shielddns-core"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "ShieldDNS core - local DNS filtering engine with AdGuard-style filter subscriptions"
 
