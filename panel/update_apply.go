@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -46,7 +47,6 @@ func setUpdateStat(stage string, percent int, msg string) {
 
 func failUpdateStat(err error, msg string) {
 	updateApplyMu.Lock()
-	updateApplyStat.Running = false
 	updateApplyStat.Error = msg
 	updateApplyMu.Unlock()
 	panelLog("更新失败：%v", err)
@@ -95,6 +95,11 @@ func (a *App) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 			if p := recover(); p != nil {
 				failUpdateStat(fmt.Errorf("panic: %v", p), "更新过程异常，未改动文件")
 			}
+			// 整个流程退出后才放开并发闸门：错误刚发生时如果立刻放开，
+			// 界面再点一次就会和收尾中的这次撞在一起
+			updateApplyMu.Lock()
+			updateApplyStat.Running = false
+			updateApplyMu.Unlock()
 		}()
 		applyUpdate(a, res)
 	}()
@@ -167,14 +172,40 @@ func applyUpdate(a *App, res updateResult) {
 	updateApplyStat.Done = true
 	updateApplyMu.Unlock()
 
-	// 先起新实例，再走正常退出流程（退出会释放单实例互斥体、还原系统 DNS）
-	cmd := exec.Command(exe)
-	cmd.Dir = exeDir
-	if err := cmd.Start(); err != nil {
+	// 不能直接在这里起新实例：此刻自己还活着，单实例互斥体和 WebView2 用户目录
+	// 都还占着，新实例会因为抢不到这些资源而立刻退出（实测就是这么失败的）。
+	// 改成交给一个脱离父进程的小启动器，等当前进程退出后再拉起新 exe。
+	if err := launchAfterExit(exe, exeDir); err != nil {
 		panelLog("更新后拉起新实例失败：%v", err)
 	}
-	time.Sleep(200 * time.Millisecond)
 	a.quit()
+}
+
+// launchAfterExit 写一个临时 cmd 脚本并以 DETACHED_PROCESS 启动：延迟几秒后 start 新 exe。
+// 延迟是给旧进程留退出时间（释放互斥体、WebView2 用户目录、核心端口）。
+func launchAfterExit(exe, exeDir string) error {
+	shell := os.Getenv("ComSpec")
+	if shell == "" {
+		shell = filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe")
+	}
+	if _, err := os.Stat(shell); err != nil {
+		return fmt.Errorf("找不到 cmd.exe（%s）：%v", shell, err)
+	}
+	script := filepath.Join(os.TempDir(), "shielddns-restart.cmd")
+	content := "@echo off\r\n" +
+		"ping -n 6 127.0.0.1 >nul\r\n" +
+		"start \"\" /d \"" + exeDir + "\" \"" + exe + "\"\r\n" +
+		"del \"%~f0\"\r\n"
+	if err := os.WriteFile(script, []byte(content), 0o644); err != nil {
+		return err
+	}
+	// 注意：必须用绝对路径。本机 PATH 里没有 System32，裸名 cmd.exe 会直接报找不到。
+	cmd := exec.Command(shell, "/c", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: 0x00000008, // DETACHED_PROCESS：不随父进程退出而被带走
+	}
+	return cmd.Start()
 }
 
 func fileSize(p string) int64 {
@@ -268,7 +299,15 @@ func downloadTo(dst, url string, expected int64) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("下载不完整：%d / %d 字节", written, total)
 	}
-	return os.Rename(tmp, dst)
+	// 刚关闭的 7MB 文件常被杀软/索引临时占用，改名会偶发失败，这里重试几次
+	var renameErr error
+	for i := 0; i < 8; i++ {
+		if renameErr = os.Rename(tmp, dst); renameErr == nil {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return renameErr
 }
 
 func unzipTo(src, dst string) error {

@@ -546,6 +546,21 @@ python scripts\verify_core.py 53 5399
 
 ## 16. 版本记录
 
+### 1.0.2
+
+**自动更新链路实测后的修正**
+
+* 修「更新完程序没起来」：原来是在自己还活着的时候 `Start` 新 exe，此时单实例互斥体和 WebView2 用户目录都还被占着，新实例抢不到资源就立刻退出。现在改成写一个临时 cmd 启动器（`DETACHED_PROCESS`）延迟约 5 秒再 `start` 新 exe，等旧进程把互斥体、WebView2 目录和 53 端口都放开。
+* 启动器必须用 cmd.exe 的绝对路径（`%ComSpec%` 兜底 `%SystemRoot%\System32\cmd.exe`）：本机 PATH 里没有 System32，裸名 `cmd.exe` 直接报 "executable file not found"。
+* 下载收尾的 `.part` → `.zip` 改名改成重试 8 次（间隔 200ms）：刚关闭的 7MB 文件常被杀软/索引临时占用，一次失败就把整次更新判死。
+* 并发闸门改成整个流程退出后才放开：之前错误发生时就清 `running`，界面再点一次会和收尾中的那次撞上（实测跑出两条下载与两个退出流程）。
+* `.old` 回滚备份在启动时可能还被旧进程映射着删不掉，改成启动后后台每 2 秒重试 6 次。
+* 界面在 `POST /system/update/apply` 返回连接错误时，先查 `/system/update/status`：更新其实已经在跑就不报「更新失败」，交给轮询显示进度。
+
+**发布**
+
+* 版本号 1.0.2（`panel/version.go`、`core/Cargo.toml`、`core/Cargo.lock` 三处同步）。
+
 ### 1.0.1
 
 **应用内自动更新**

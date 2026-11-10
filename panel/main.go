@@ -74,10 +74,20 @@ func main() {
 	// 上一次遗留的文件只要当前没被占用就顺手删掉，避免 dist 里堆垃圾。
 	// 应用内自动更新还会把旧文件改成 .old 当回滚备份，重启后同样清掉。
 	if exe, err := os.Executable(); err == nil {
+		coreOld := filepath.Join(filepath.Dir(exe), "core", "shielddns-core.exe.old")
 		_ = os.Remove(exe + "~")
 		_ = os.Remove(exe + ".old")
-		_ = os.Remove(filepath.Join(filepath.Dir(exe), "core", "shielddns-core.exe.old"))
+		_ = os.Remove(coreOld)
 		_ = os.RemoveAll(filepath.Join(DataDir(), "update"))
+		// 刚更新完就重启时，旧进程可能还映射着 .old 里的镜像，这一次删不掉；
+		// 后台重试几次，别让回滚备份永久留在安装目录里
+		go func() {
+			for i := 0; i < 6; i++ {
+				time.Sleep(2 * time.Second)
+				_ = os.Remove(exe + ".old")
+				_ = os.Remove(coreOld)
+			}
+		}()
 	}
 
 	cfg := loadConfig()

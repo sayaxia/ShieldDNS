@@ -622,10 +622,16 @@ async function applyUpdate() {
   try {
     await api("/system/update/apply", { method: "POST", body: {} });
   } catch (e) {
-    text.textContent = `更新失败：${e.message}`;
-    toast(e.message, "err");
-    if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = "立即更新"; }
-    return;
+    // 请求本身就失败时先看一眼后端状态：更新其实已经跑起来了（或进程正在收尾），
+    // 就不能把连接中断当成更新失败
+    let st = null;
+    try { st = await api("/system/update/status"); } catch (_) {}
+    if (!st || (!st.running && !st.done && !st.message && !st.error)) {
+      text.textContent = `更新失败：${e.message}`;
+      toast(e.message, "err");
+      if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = "立即更新"; }
+      return;
+    }
   }
   // 轮询进度；进程重启后请求会失败，这属于正常收尾
   let stopped = false;
