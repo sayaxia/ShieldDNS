@@ -22,6 +22,23 @@ const PAGE_META = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+// ---------- 界面等比缩放 ----------
+// 页面按 1220×820 的逻辑尺寸设计，窗口拉小/放大时整体缩放，而不是让卡片被挤压换行。
+// 窗口比例已由面板进程锁定为 1220:820，所以宽高用同一个系数即可。
+const DESIGN_WIDTH = 1220;
+const MIN_SCALE = 0.7;
+const MAX_SCALE = 2.4;
+
+function applyUiScale() {
+  const w = window.innerWidth || document.documentElement.clientWidth || DESIGN_WIDTH;
+  const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, w / DESIGN_WIDTH));
+  document.documentElement.style.zoom = scale.toFixed(3);
+}
+
+window.addEventListener("resize", applyUiScale);
+applyUiScale();
+
 const esc = (s) =>
   String(s == null ? "" : s)
     .replace(/&/g, "&amp;")

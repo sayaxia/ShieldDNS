@@ -494,10 +494,5 @@ button.compact { padding: 6px 12px; font-size: 12px; }
 .toast.warn { border-color: rgba(255, 196, 107, 0.4); }
 @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
-@media (max-width: 1080px) {
-  .sidebar { width: 200px; flex-basis: 200px; }
-  .stats { grid-template-columns: repeat(2, 1fr); }
-  .grid-2, .mode-grid, .syntax-grid { grid-template-columns: 1fr; }
-  .form-grid { grid-template-columns: 1fr; }
-  .field.wide { grid-column: auto; }
-}
+/* 窗口变小时整体等比缩放（见 app.js 的 applyUiScale），布局不再重排，
+   因此不再保留按视口宽度切换栅格的断点，否则会被 zoom 前的原始视口宽度误触发。 */
