@@ -26,16 +26,15 @@ const (
 	wmExitSizeMove  = 0x0232 // WM_EXITSIZEMOVE
 	wmDpiChanged    = 0x02E0 // WM_DPICHANGED
 
-	spiGetWorkArea   = 0x0030
-	smXVirtualScreen = 76
-	smYVirtualScreen = 77
-	smCXVirtualScreen = 78
-	smCYVirtualScreen = 79
-	swpNoSize        = 0x0001
-	swpNoMove        = 0x0002
+	spiGetWorkArea = 0x0030
 	// HWND_TOPMOST/HWND_NOTOPMOST 是 -1/-2，用补码表示
 	hwndTopmost    = ^uintptr(0)
 	hwndNotTopmost = ^uintptr(1)
+	swpNoSize      = 0x0001
+	swpNoMove      = 0x0002
+	swpShowWindow  = 0x0040
+	// SW_SHOWNORMAL：激活并以正常状态显示（SW_SHOW 会被启动信息覆盖成最小化）
+	swShowNormal = 1
 	swpNoZOrder    = 0x0004
 	swpNoActivate  = 0x0010
 
@@ -297,25 +296,6 @@ func fitWindowToDPI(hwnd uintptr, center bool) {
 	panelLog("窗口按 DPI 适配（无工作区信息）：dpi=%d 尺寸=%dx%d", windowDPI(hwnd), tw, th)
 }
 
-// offScreenBelow 把窗口挪到整个虚拟桌面之外：既不占用户视野（多显示器拼接也不会
-// 落在某块屏上），又留在最近的那块显示器上，这样 WebView2 会正常渲染
-// （隐藏窗口会被 Chromium 挂起，页面根本不加载）。
-func offScreenBelow(hwnd uintptr) {
-	var r winRect
-	if ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
-		return
-	}
-	vx, _, _ := procGetSystemMetrics.Call(smXVirtualScreen)
-	vy, _, _ := procGetSystemMetrics.Call(smYVirtualScreen)
-	vw, _, _ := procGetSystemMetrics.Call(smCXVirtualScreen)
-	vh, _, _ := procGetSystemMetrics.Call(smCYVirtualScreen)
-	x := int(vx) + int(vw)
-	y := int(vy) + int(vh)
-	procSetWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y), 0, 0,
-		swpNoSize|swpNoZOrder|swpNoActivate)
-	panelLog("窗口预热：移到屏幕外 (%d,%d)（%dx%d）", x, y, r.Right-r.Left, r.Bottom-r.Top)
-}
-
 func NewWindow(url string, iconID uint) (*Window, error) {
 	// 建窗之前就按系统缩放算出最终物理尺寸：如果先按逻辑尺寸建窗、显示之后再
 	// SetWindowPos 放大，用户会看到窗口“先小后跳”，跳的中间还是 WebView2 的白色底。
@@ -344,8 +324,8 @@ func NewWindow(url string, iconID uint) (*Window, error) {
 		old, _, _ := procSetWindowLongPtrW.Call(win.hwnd, ^uintptr(3), wndProcAddr) // GWLP_WNDPROC = -4
 		winCtx.old = old
 		win.oldProc = old
-		// 库按 Hidden 已把窗口放在屏幕外；这里再兜一次，确保它不在可视区里
-		offScreenBelow(win.hwnd)
+		// 库按 Hidden 不显示窗口；这里再 SW_HIDE 一次兜底（例如以后换回原版库）
+		procShowWindow.Call(win.hwnd, swHide)
 	}
 	wv.Navigate(url)
 	return win, nil
@@ -366,8 +346,12 @@ func (w *Window) Show() {
 	w.fitOnce.Do(func() {
 		fitWindowToDPI(hwnd, true)
 	})
-	procShowWindow.Call(hwnd, 5) // SW_SHOW
-	procShowWindow.Call(hwnd, 9) // SW_RESTORE
+	// 首次 ShowWindow 会沿用进程启动时的 STARTUPINFO，某些启动方式下会被当成「最小化」，
+	// 窗口直接落到 (-32000,-32000) 那种屏幕外状态。这里显式要求正常显示，
+	// 再用 SWP_SHOWWINDOW 强制定位到屏幕中央。
+	procShowWindow.Call(hwnd, swShowNormal)
+	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
+		swpNoSize|swpNoMove|swpNoZOrder|swpShowWindow)
 	procSetForegroundWin.Call(hwnd)
 	// 窗口是在屏幕外预热出来的，SetForegroundWindow 有可能被系统拒绝，
 	// 再走一次“临时置顶”把窗口提到最前面，避免它藏在别的窗口后面。

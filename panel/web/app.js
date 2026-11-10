@@ -870,14 +870,20 @@ async function boot() {
   setInterval(tick, 2000);
 }
 
-// 首帧画出来后通知主程序显示窗口：窗口在收到这个信号之前一直是隐藏的，
+// 首屏准备好后通知主程序显示窗口：窗口在收到这个信号之前一直是隐藏的，
 // 这样启动时不会先看到一块白色（WebView2 默认背景色）再看到内容。
 function signalFirstPaint() {
-  const done = () => fetch("/panel/ready", { method: "POST" }).catch(() => {});
+  let sent = false;
+  const done = () => {
+    if (sent) return;
+    sent = true;
+    fetch("/panel/ready", { method: "POST" }).catch(() => {});
+  };
+  // 窗口还没显示时 Chromium 不回调 requestAnimationFrame，只靠 rAF 永远等不到，
+  // 所以先用 setTimeout 兜一条：此刻首屏数据已经在 DOM 里，窗口一显示就是画好的样子。
+  setTimeout(done, 250);
   if (window.requestAnimationFrame) {
     requestAnimationFrame(() => requestAnimationFrame(done));
-  } else {
-    setTimeout(done, 50);
   }
 }
 

@@ -64,11 +64,9 @@ type WindowOptions struct {
 	Height uint
 	IconId uint
 	Center bool
-	// Hidden 为 true 时，窗口建在屏幕可视区之外（右下角屏幕边缘之外）并照常
-	// ShowWindow：必须真的显示，Chromium 对隐藏窗口会挂起页面、连 JS 都不跑；
-	// 放到屏幕外则既不占用户视野，页面又照常加载，调用方可以等首帧画完再把窗口
-	// 移回屏幕中央。此时不抢焦点。默认（false）保持原库行为——建窗即在屏幕中央
-	// 显示，中间会露出没有内容的白色客户区。
+	// Hidden 为 true 时建完窗不调用 ShowWindow：此刻 WebView2 还没创建，显示出来
+	// 先是一块白色客户区（桌面程序启动先白一下就是这个）。页面在隐藏窗口里照常
+	// 加载执行，调用方等首屏信号之后再自己显示窗口，用户第一眼就是画好的界面。
 	Hidden bool
 }
 
@@ -317,16 +315,6 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 		// calculate window position
 		posX = (uint(screenWidth) - windowWidth) / 2
 		posY = (uint(screenHeight) - windowHeight) / 2
-		if opts.Hidden {
-			// 整个虚拟桌面之外：多显示器（上下/左右拼接）也不会落在任何一块屏上，
-			// 同时仍在最近的那块显示器上，DPI 与布局都是真实的
-			vx, _, _ := w32.User32GetSystemMetrics.Call(76)  // SM_XVIRTUALSCREEN
-			vy, _, _ := w32.User32GetSystemMetrics.Call(77)  // SM_YVIRTUALSCREEN
-			vw, _, _ := w32.User32GetSystemMetrics.Call(78)  // SM_CXVIRTUALSCREEN
-			vh, _, _ := w32.User32GetSystemMetrics.Call(79)  // SM_CYVIRTUALSCREEN
-			posX = uint(int(vx) + int(vw))
-			posY = uint(int(vy) + int(vh))
-		}
 	} else {
 		// use default position
 		posX = w32.CW_USEDEFAULT
@@ -349,11 +337,12 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	)
 	setWindowContext(w.hwnd, w)
 
-	// 必须真的 ShowWindow：隐藏窗口会让 Chromium 挂起页面（连 JS 都不执行）。
-	// Hidden 时窗口停在屏幕外，所以照常显示也不会被用户看到，且不抢焦点。
-	_, _, _ = w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)
-	_, _, _ = w32.User32UpdateWindow.Call(w.hwnd)
+	// Hidden 时不显示窗口：建窗此刻 WebView2 还没创建，一显示就会露出白色客户区。
+	// 页面在隐藏窗口里照常加载执行（只是不回调 requestAnimationFrame），
+	// 调用方等页面的首屏信号之后自己调 ShowWindow 显示。
 	if !opts.Hidden {
+		_, _, _ = w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)
+		_, _, _ = w32.User32UpdateWindow.Call(w.hwnd)
 		_, _, _ = w32.User32SetFocus.Call(w.hwnd)
 	}
 

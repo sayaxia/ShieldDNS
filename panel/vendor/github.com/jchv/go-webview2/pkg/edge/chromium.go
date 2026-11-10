@@ -221,6 +221,14 @@ func (e *Chromium) CreateCoreWebView2ControllerCompleted(res uintptr, controller
 
 	_ = e.controller.AddAcceleratorKeyPressed(e.acceleratorKeyPressed, &token)
 
+	// 本地补丁：控件默认按窗口可见性决定要不要渲染，窗口没显示时页面会一直不画
+	// （首屏信号靠 setTimeout 能到，但内容是一片空白）。这里显式保持可见，
+	// 并把默认背景色设成面板底色，未绘制时露出的也是深色而不是白色。
+	_ = e.controller.PutIsVisible(true)
+	if c2 := e.controller.GetICoreWebView2Controller2(); c2 != nil {
+		_ = c2.PutDefaultBackgroundColor(COREWEBVIEW2_COLOR{A: 255, R: 11, G: 15, B: 13})
+	}
+
 	atomic.StoreUintptr(&e.inited, 1)
 
 	if e.focusOnInit {
