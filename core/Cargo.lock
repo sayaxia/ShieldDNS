@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "shielddns-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "hickory-proto",
  "regex",

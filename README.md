@@ -546,6 +546,21 @@ python scripts\verify_core.py 53 5399
 
 ## 16. 版本记录
 
+### 1.0.1
+
+**应用内自动更新**
+
+* 设置页有新版时的「前往下载」换成「立即更新」：由面板自己下载 Release 压缩包、解压校验，把 `ShieldDNS.exe` 与 `core\shielddns-core.exe` 换成新文件，再拉起新实例、退出当前进程，不用再去浏览器下载解压。
+* 替换顺序是「停核心 → 旧文件改名 `.old` → 写新文件 → 起新进程 → 退出」。Windows 不允许覆盖正在运行的 exe，但允许改名；拷贝失败会把 `.old` 改回去，`.old` 下次启动时清掉。
+* Release 包外面套了一层版本目录（`ShieldDNS-1.0.1-win-x64/`），所以按文件名递归定位程序与核心，不假定文件在压缩包根上。
+* 下载先写 `.part`，长度和 Release 报的尺寸对不上就当失败重下；解压过滤 zip-slip；解出的程序与核心体积不合理时不动现有文件。
+* 进度走 `GET /system/update/status`，界面 700ms 轮询 `stage/percent/message`；更新完成后程序重启，防护按既有逻辑回到待命状态，需要手动再开。
+* 装在没有写入权限的目录（如 `Program Files`）时会失败并提示先「以管理员身份重启」；「发布页」按钮保留作手动兜底。
+
+**发布**
+
+* 版本号 1.0.1（`panel/version.go`、`core/Cargo.toml`、`core/Cargo.lock` 三处同步）。
+
 ### 1.0.0
 
 **后台助手**
