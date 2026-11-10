@@ -30,12 +30,12 @@ const (
 	swpNoZOrder    = 0x0004
 	swpNoActivate  = 0x0010
 
-	// 设计稿的逻辑尺寸（CSS 像素），实际窗口按当前 DPI 换算成物理像素
-	baseLogicalWidth  = 1220
-	baseLogicalHeight = 820
+	// 常规窗口的逻辑尺寸（CSS 像素），960×593 是黄金比例 1.618，实际按当前 DPI 换算成物理像素
+	baseLogicalWidth  = 960
+	baseLogicalHeight = 593
 
-	// 最小逻辑宽度：再往下侧栏、卡片、设置行就开始互相挤压
-	minLogicalWidth = 1000
+	// 最小逻辑宽度：再往下整页等比缩得太小，字号开始难认
+	minLogicalWidth = 790
 )
 
 // 锁定宽高比：无论怎么拖动窗口，都保持设计稿的比例
