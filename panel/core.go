@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -58,7 +59,7 @@ func (m *CoreManager) Start() error {
 	}
 	if _, err := os.Stat(m.exePath); err != nil {
 		m.lastErr = "找不到核心程序: " + m.exePath
-		return fmt.Errorf(m.lastErr)
+		return errors.New(m.lastErr)
 	}
 	// 启动前先清掉上一轮遗留的核心进程：它可能还占着控制端口和监听端口，
 	// 导致新核心绑不上端口、而 ping 却打到旧进程上，出现"假成功"。
@@ -108,7 +109,7 @@ func (m *CoreManager) Start() error {
 		time.Sleep(250 * time.Millisecond)
 	}
 	m.lastErr = "核心启动超时（控制接口无响应或不属于本进程）"
-	return fmt.Errorf(m.lastErr)
+	return errors.New(m.lastErr)
 }
 
 type healthResp struct {

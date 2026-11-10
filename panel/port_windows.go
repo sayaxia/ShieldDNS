@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -29,7 +30,7 @@ var (
 )
 
 const (
-	processTerminate              = 0x0001
+	processTerminate               = 0x0001
 	processQueryLimitedInformation = 0x1000
 )
 
@@ -161,7 +162,7 @@ func KillPortOwner(port int) (*PortOwner, error) {
 		if !IsAdmin() {
 			msg += "（该进程以更高权限运行，请点「以管理员身份重启」后再试）"
 		}
-		return o, fmt.Errorf(msg)
+		return o, errors.New(msg)
 	}
 	defer procCloseHandle.Call(h)
 	if r, _, _ := procTerminateProcess.Call(h, 1); r == 0 {
