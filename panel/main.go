@@ -132,7 +132,10 @@ func main() {
 			}
 		},
 		app.toggleProtection,
-		app.quit,
+		func() {
+			panelLog("托盘菜单点击「退出应用」")
+			app.quit()
+		},
 	)
 	tray.Start()
 
@@ -189,6 +192,7 @@ func main() {
 		win.Show()
 	}()
 	win.Run()
+	panelLog("窗口消息循环已结束（收到 WM_QUIT），开始退出")
 	app.quit()
 }
 

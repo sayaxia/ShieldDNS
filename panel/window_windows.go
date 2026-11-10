@@ -26,6 +26,7 @@ const (
 	wmSizing        = 0x0214 // WM_SIZING
 	wmExitSizeMove  = 0x0232 // WM_EXITSIZEMOVE
 	wmDpiChanged    = 0x02E0 // WM_DPICHANGED
+	wmNcDestroy     = 0x0082 // WM_NCDESTROY
 
 	spiGetWorkArea = 0x0030
 	// HWND_TOPMOST/HWND_NOTOPMOST 是 -1/-2，用补码表示
@@ -94,8 +95,13 @@ var (
 func mainWndProc(hwnd, msg, wp, lp uintptr) uintptr {
 	switch msg {
 	case wmClose:
+		panelLog("收到 WM_CLOSE，收进托盘（不销毁窗口）")
 		procShowWindow.Call(hwnd, swHide)
 		return 0
+	case wmDestroy:
+		panelLog("窗口被销毁（WM_DESTROY）")
+	case wmNcDestroy:
+		panelLog("窗口进入 WM_NCDESTROY")
 	case wmGetMinMaxInfo:
 		// 先让默认处理把 ptMaxSize/ptMaxTrackSize 等字段填好，只覆盖最小尺寸，
 		// 否则未初始化的字段会被系统当成限制，把窗口莫名压小。

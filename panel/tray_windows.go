@@ -34,7 +34,13 @@ var (
 	procGetSystemMetrics = modUser32.NewProc("GetSystemMetrics")
 	procMessageBoxW      = modUser32.NewProc("MessageBoxW")
 	procGetModuleHandleW = modKernel32.NewProc("GetModuleHandleW")
+	// RegisterWindowMessageW 用来接 explorer 广播的 "TaskbarCreated"
+	procRegisterWindowMsgW = modUser32.NewProc("RegisterWindowMessageW")
 )
+
+// msgTaskbarCreated 是资源管理器重启后广播的消息号：收到就得把托盘图标重新加回去，
+// 否则任务栏重建一次，图标就永远消失（进程还在跑，但用户找不到入口）。
+var msgTaskbarCreated uint32
 
 const (
 	wmDestroy       = 0x0002
@@ -187,6 +193,12 @@ func (t *Tray) Start() {
 		t.iconOff = loadIcon(iconOff)
 		t.mu.Unlock()
 
+		// 先登记 "TaskbarCreated"：之后 explorer 重启时它会广播，我们在窗口过程里补图标
+		name, _ := windows.UTF16FromString("TaskbarCreated")
+		if id, _, _ := procRegisterWindowMsgW.Call(uintptr(unsafe.Pointer(&name[0]))); id != 0 {
+			msgTaskbarCreated = uint32(id)
+		}
+
 		t.addIcon()
 
 		var msg msgStruct
@@ -224,7 +236,12 @@ func (t *Tray) addIcon() {
 		HIcon:           t.iconOn,
 	}
 	setTip(&nid, t.paused)
-	procShellNotifyIconW.Call(nimAdd, uintptr(unsafe.Pointer(&nid)))
+	if r, _, _ := procShellNotifyIconW.Call(nimAdd, uintptr(unsafe.Pointer(&nid))); r == 0 {
+		// 返回 FALSE 说明图标根本没加进去（任务栏还没建好、或上一次注册残留）
+		panelLog("托盘图标 NIM_ADD 失败")
+	} else {
+		panelLog("托盘图标已添加")
+	}
 	t.ready = true
 }
 
@@ -274,6 +291,23 @@ func trayWndProc(hwnd, msg, wp, lp uintptr) uintptr {
 	if t == nil {
 		r, _, _ := procDefWindowProcW.Call(hwnd, msg, wp, lp)
 		return r
+	}
+	// explorer 重启（崩溃、更新、"重启资源管理器"）后会广播 TaskbarCreated，
+	// 此时旧的图标注册已经随任务栏一起没了，必须重新 NIM_ADD 一次
+	if msgTaskbarCreated != 0 && uint32(msg) == msgTaskbarCreated {
+		// 任务栏重建了：旧的注册随 explorer 一起没了，先清一次残留再加回去
+		t.mu.Lock()
+		hwnd := t.hwnd
+		ready := t.ready
+		t.mu.Unlock()
+		if ready && hwnd != 0 {
+			del := notifyIconData{CbSize: uint32(unsafe.Sizeof(notifyIconData{})), HWnd: hwnd, UID: 1}
+			procShellNotifyIconW.Call(nimDelete, uintptr(unsafe.Pointer(&del)))
+			t.ready = false
+		}
+		panelLog("收到 TaskbarCreated，重新注册托盘图标")
+		t.addIcon()
+		return 0
 	}
 	switch msg {
 	case trayCallbackID:

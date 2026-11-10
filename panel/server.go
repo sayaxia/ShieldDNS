@@ -631,6 +631,7 @@ func (a *App) handleRestart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleQuit(w http.ResponseWriter, r *http.Request) {
+	panelLog("HTTP 请求退出：method=%s from=%s ua=%s", r.Method, r.RemoteAddr, r.UserAgent())
 	writeJSON(w, 200, map[string]any{"ok": true})
 	go func() {
 		time.Sleep(200 * time.Millisecond)
@@ -639,6 +640,9 @@ func (a *App) handleQuit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) quit() {
+	// 退出痕迹：托盘「退出应用」、设置页「退出」、退出后核心清理都走这里，
+	// 之前这条路径不写日志，事后无法区分「用户主动退出」和「进程自己没了」。
+	panelLog("退出流程开始：DNSMode=%s takenOver=%v", loadConfig().DNSMode, IsTakenOver())
 	// 兜底：清理步骤（托盘/WebView）偶尔会卡住消息循环，
 	// 2.5 秒后无论如何强制退出，避免进程残留导致下次启动报「已有实例」。
 	go func() {

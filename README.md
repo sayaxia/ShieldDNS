@@ -539,6 +539,25 @@ python scripts\verify_core.py 53 5399
 
 ## 16. 版本记录
 
+### 1.0.0
+
+**后台助手**
+
+* 修「换了程序路径后助手重启没用，必须卸载重装」：根因是 `schtasks /End` 只结束任务实例，SYSTEM 助手进程还活着并占着命名管道，任务定义 `MultipleInstancesPolicy=IgnoreNew` 让新实例拉不起来，界面 ping 到旧进程就显示「运行中」，成功的假象直到卸载（连带删进程）才消失。
+* 现在注册 / 卸载助手任务都会在 `/End` 后等管道真正断开（1.5s），没断就用 `taskkill /F /FI "IMAGENAME eq ShieldDNS.exe" /FI "SESSION eq 0"` 清掉，再等 3s；仍失败就明确报错，不再假装成功。
+* 助手 ping 回传自己的 exe 路径，`/system/info` 新增 `helperStale`；设置页助手卡显示「路径已变」并提示点「重启」，不用卸载重装。
+* 启动自愈：自启项存在就按当前路径重写；`helperStale` 且当前有管理员权限时自动重注册助手任务。
+
+**托盘与退出**
+
+* 托盘补 `TaskbarCreated` 处理：注册 `RegisterWindowMessageW("TaskbarCreated")`，资源管理器重启 / 更新 / 「重启资源管理器」后先清残留再重新 `NIM_ADD`，不再出现「托盘图标消失、程序还在后台跑且再也不回来」。
+* 退出路径全部打点：`quit()` 入口（带 `DNSMode`、是否已接管 DNS）、`/system/quit` 的来源与 UA、托盘菜单「退出应用」、`WM_CLOSE` / `WM_DESTROY`、窗口消息循环结束、`NIM_ADD` 的返回值。事后能一句话分清是用户主动退出、接口调用，还是进程自己没了——之前这条路径不写日志，只能靠猜。
+* 点 × 收托盘的行为不变：`WM_CLOSE` 接管成 `SW_HIDE`，进程、核心、防护都继续跑，只有托盘菜单「退出应用」或设置页「退出」才真正结束。
+
+**发布**
+
+* 版本号 1.0.0（`panel/version.go`、`core/Cargo.toml`、`core/Cargo.lock` 三处同步）。
+
 ### 0.1.2
 
 **窗口与界面**
