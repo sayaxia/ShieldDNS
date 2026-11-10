@@ -71,7 +71,7 @@ Unsigned Windows executables show the SmartScreen "Unknown publisher" warning, a
 **Maintainers**
 
 ```
-[填你的 GitHub 用户名，例如 @sayaxia]
+@sayaxia
 ```
 
 **Committers and reviewers**
@@ -83,7 +83,7 @@ Unsigned Windows executables show the SmartScreen "Unknown publisher" warning, a
 **Approvers (approve every signing request)**
 
 ```
-[填你的 GitHub 用户名]
+@sayaxia
 ```
 
 **MFA enabled on GitHub and on the SignPath account?**
