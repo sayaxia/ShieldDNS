@@ -1,6 +1,8 @@
 # 代码签名与 SmartScreen
 
-本文说明 ShieldDNS 的签名现状、可用的免费/低成本渠道、以及具体申请与集成步骤。当前状态：**未签名**（计划走 SignPath Foundation 免费开源签名）。
+本文说明 ShieldDNS 的签名现状、可用的免费/低成本渠道、以及具体申请与集成步骤。
+
+> **当前状态（2026-11-10）**：0.1.0 产物**未签名**。SignPath Foundation 免费开源签名申请已于 2026-11-10 通过官网表单提交（项目 ShieldDNS / 仓库 <https://github.com/sayaxia/ShieldDNS> / MIT / GitHub Actions 构建 / 申请人 Saya Xia），等待审核结果。审核通过后按第 3 节配置仓库变量即可自动签名。
 
 ---
 
