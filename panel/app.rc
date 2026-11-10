@@ -1,0 +1,4 @@
+1 ICON "assets/app.ico"
+2 ICON "assets/shield_on.ico"
+3 ICON "assets/shield_off.ico"
+1 24 "app.manifest"

@@ -1,0 +1,96 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 MinGW（提供 windres）
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+
+      - name: 启用 Cargo 缓存
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: 构建（build.ps1）
+        shell: pwsh
+        env:
+          SHIELDDNS_MINGW: C:\msys64\mingw64\bin
+        run: |
+          .\build.ps1
+
+      - name: 打包
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path core\Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
+          $name = "ShieldDNS-$ver-win-x64"
+          New-Item -ItemType Directory -Path "out\$name" -Force | Out-Null
+          Copy-Item dist\ShieldDNS.exe "out\$name\" -Force
+          Copy-Item dist\core "out\$name\core" -Recurse -Force
+          Copy-Item README.md, LICENSE "out\$name\" -Force
+          Compress-Archive -Path "out\$name" -DestinationPath "out\$name.zip" -CompressionLevel Optimal
+          echo "ASSET=out\$name.zip" >> $env:GITHUB_ENV
+          echo "VERSION=$ver" >> $env:GITHUB_ENV
+
+      # ---- 代码签名（SignPath，配置好 Organization ID / 项目 / 策略后自动启用）----
+      # 需要仓库 Variables: SIGNPATH_ORG_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_POLICY_SLUG
+      # 需要仓库 Secrets: SIGNPATH_API_TOKEN
+      # 详见 docs/SIGNING.md
+      - name: 上传待签名产物
+        id: upload
+        if: vars.SIGNPATH_ORG_ID != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned
+          path: out/*.zip
+
+      - name: SignPath 签名
+        if: vars.SIGNPATH_ORG_ID != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORG_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG }}
+          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShieldDNS-${{ env.VERSION }}-win-x64
+          path: out/*.zip
+
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.zip
+          generate_release_notes: true

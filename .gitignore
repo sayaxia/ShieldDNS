@@ -1,0 +1,19 @@
+# 构建产物
+dist/
+panel/dist/
+core/target/
+panel/app.syso
+
+# 依赖缓存（vendor 例外，需要随仓库带走）
+panel/vendor/modules.txt.bak
+
+# 运行时残留镜像（程序启动时会自动清理）
+*.exe~
+*~
+
+# 编辑器 / 临时文件
+*.log
+*.tmp
+.vs/
+.idea/
+.vscode/

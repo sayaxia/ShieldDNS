@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ShieldDNS</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand">
+    <img src="/assets/shield_on.png" class="brand-mark" alt="ShieldDNS" />
+    <div class="brand-text">
+      <strong>ShieldDNS</strong>
+      <span>本地 DNS 防护</span>
+    </div>
+  </div>
+
+  <nav class="nav">
+    <button class="nav-item active" data-page="overview">
+      <svg viewBox="0 0 24 24"><path d="M3 12l9-9 9 9M5 10v10h14V10"/></svg>
+      <span>概览</span>
+    </button>
+    <button class="nav-item" data-page="filters">
+      <svg viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>
+      <span>过滤订阅</span>
+    </button>
+    <button class="nav-item" data-page="rules">
+      <svg viewBox="0 0 24 24"><path d="M5 4h14v16l-7-3-7 3z"/></svg>
+      <span>自定义规则</span>
+    </button>
+    <button class="nav-item" data-page="logs">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      <span>查询日志</span>
+    </button>
+    <button class="nav-item" data-page="settings">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.4"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+      <span>设置</span>
+    </button>
+  </nav>
+
+  <div class="sidebar-foot">
+    <div class="mini-status">
+      <span class="dot" id="sideDot"></span>
+      <div>
+        <strong id="sideState">正在连接…</strong>
+        <small id="sidePort">127.0.0.1:—</small>
+      </div>
+    </div>
+    <button class="ghost-btn block" id="quitApp">退出应用</button>
+  </div>
+</aside>
+
+<main class="main">
+  <header class="topbar">
+    <div class="titles">
+      <h1 id="pageTitle">概览</h1>
+      <p id="pageSub">实时查看防护状态与拦截效果</p>
+    </div>
+    <div class="chips">
+      <span class="chip" id="chipCore"><i class="dot"></i><span>核心连接中</span></span>
+      <span class="chip" id="chipAdmin"><i class="dot"></i><span>权限检测中</span></span>
+      <span class="chip soft" id="chipPort">127.0.0.1:—</span>
+    </div>
+  </header>
+
+  <section class="page active" id="page-overview">
+    <div class="hero" id="hero">
+      <div class="hero-shield">
+        <div class="halo"></div>
+        <img id="heroIcon" src="/assets/shield_on.png" alt="防护状态" />
+      </div>
+      <div class="hero-copy">
+        <div class="state-line">
+          <span class="pill on" id="statePill"><i class="dot"></i><span>保护已开启</span></span>
+          <span class="muted" id="heroTime">—</span>
+        </div>
+        <h2 id="heroTitle">DNS 防护正在运行</h2>
+        <p id="heroDesc">所有域名查询会先经过过滤引擎，命中规则直接返回 NXDOMAIN，广告与追踪域名不会被真正解析。</p>
+        <div class="hero-meta">
+          <span>监听 <b id="heroListen">—</b></span>
+          <span>规则 <b id="heroRules">—</b></span>
+          <span>拦截率 <b id="heroRate">—</b></span>
+        </div>
+      </div>
+      <div class="hero-actions">
+        <label class="switch big" title="开启 / 暂停保护">
+          <input type="checkbox" id="protectToggle" />
+          <span class="track"><span class="knob"></span></span>
+        </label>
+        <span class="switch-label" id="switchLabel">已开启</span>
+        <button class="primary" id="btnUpdateAll">更新全部订阅</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat">
+        <span class="stat-label">查询总数</span>
+        <strong id="statTotal">0</strong>
+        <small>累计经过过滤引擎</small>
+      </div>
+      <div class="stat">
+        <span class="stat-label">已拦截</span>
+        <strong class="good" id="statBlocked">0</strong>
+        <small>命中广告 / 追踪规则</small>
+      </div>
+      <div class="stat">
+        <span class="stat-label">拦截率</span>
+        <strong id="statRate">0%</strong>
+        <small>拦截 / 查询总数</small>
+      </div>
+      <div class="stat">
+        <span class="stat-label">缓存命中</span>
+        <strong id="statCache">0</strong>
+        <small id="statCacheSize">缓存 0 条</small>
+      </div>
+      <div class="stat">
+        <span class="stat-label">生效规则</span>
+        <strong id="statRules">0</strong>
+        <small id="statCustom">自定义 0 条</small>
+      </div>
+      <div class="stat">
+        <span class="stat-label">运行时长</span>
+        <strong id="statUptime">0 分钟</strong>
+        <small id="statUpstreams">上游 —</small>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <header class="card-head">
+          <h3>最近查询</h3>
+          <button class="link" data-goto="logs">查看全部</button>
+        </header>
+        <div class="mini-log" id="recentLogs">
+          <div class="empty small">还没有查询记录</div>
+        </div>
+      </div>
+      <div class="card">
+        <header class="card-head">
+          <h3>拦截最多的域名</h3>
+          <small>Top 20</small>
+        </header>
+        <div class="top-list" id="topList">
+          <div class="empty small">暂无拦截</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" id="page-filters">
+    <div class="card">
+      <header class="card-head">
+        <h3>订阅过滤器</h3>
+        <div class="row-gap">
+          <span class="muted" id="filterSummary">—</span>
+          <button class="ghost-btn" id="btnUpdateAll2">全部更新</button>
+        </div>
+      </header>
+      <p class="hint">支持 AdGuard 语法（<code>||domain^</code>、<code>@@</code> 白名单、<code>/regex/</code>、hosts 格式）。每个订阅按自己的更新间隔自动拉取，内置订阅默认 12 小时。</p>
+      <div class="filter-list" id="filterList">
+        <div class="empty small">加载中…</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <header class="card-head">
+        <h3>通过 URL 添加过滤器</h3>
+        <small>支持任意 AdGuard 规则订阅地址</small>
+      </header>
+      <div class="form-grid">
+        <label class="field">
+          <span>名称（可选）</span>
+          <input id="newFilterName" placeholder="例如：我的拦截列表" />
+        </label>
+        <label class="field wide">
+          <span>过滤器 URL</span>
+          <input id="newFilterUrl" placeholder="https://example.com/adguard.txt" />
+        </label>
+        <button class="primary" id="btnAddFilter">添加并下载</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" id="page-rules">
+    <div class="card">
+      <header class="card-head tools-only">
+        <div class="row-gap">
+          <span class="muted" id="ruleCount">—</span>
+          <button class="primary" id="btnSaveRules">保存并生效</button>
+        </div>
+      </header>
+      <p class="hint">每行一条规则，<code>!</code> 或 <code>#</code> 开头为注释。保存后立即重建过滤引擎并清空 DNS 缓存。</p>
+      <textarea id="rulesEditor" spellcheck="false" placeholder="||ads.example.com^"></textarea>
+      <div class="syntax-grid">
+        <div><code>||example.com^</code><span>拦截该域名及所有子域</span></div>
+        <div><code>@@||good.example.com^</code><span>白名单，优先级高于拦截</span></div>
+        <div><code>/ads[0-9]*\.js/</code><span>正则匹配域名</span></div>
+        <div><code>0.0.0.0 tracker.com</code><span>hosts 文件写法</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" id="page-logs">
+    <div class="card">
+      <header class="card-head tools-only">
+        <div class="row-gap">
+          <input class="search" id="logSearch" placeholder="筛选域名 / 规则" />
+          <select id="logFilter">
+            <option value="all">全部结果</option>
+            <option value="blocked">已拦截</option>
+            <option value="allowed">已放行</option>
+            <option value="cached">缓存命中</option>
+          </select>
+          <label class="check"><input type="checkbox" id="logAuto" checked /> 自动刷新</label>
+          <button class="ghost-btn" id="btnClearLogs">清空</button>
+        </div>
+      </header>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr><th>时间</th><th>域名</th><th>类型</th><th>结果</th><th>命中规则</th><th>耗时</th><th>客户端</th></tr>
+          </thead>
+          <tbody id="logBody"></tbody>
+        </table>
+        <div class="empty" id="logEmpty">暂无日志，先发起一次域名查询试试。</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" id="page-settings">
+    <div class="card">
+      <header class="card-head">
+        <h3>DNS 运行模式</h3>
+        <span class="badge" id="adminBadge">权限检测中</span>
+      </header>
+      <div class="mode-grid">
+        <label class="mode" data-mode="custom">
+          <input type="radio" name="dnsmode" value="custom" />
+          <div>
+            <strong>自定义端口</strong>
+            <p>核心监听 127.0.0.1:&lt;端口&gt;，自行把设备 / 路由器的 DNS 指过来，不需要管理员权限。</p>
+          </div>
+        </label>
+        <label class="mode" data-mode="system">
+          <input type="radio" name="dnsmode" value="system" />
+          <div>
+            <strong>53 端口 + 自动接管</strong>
+            <p>核心占用 53 端口，并把本机所有 IPv4 网卡的 DNS 改为 127.0.0.1，退出前可一键还原。</p>
+          </div>
+        </label>
+      </div>
+
+      <div class="form-grid">
+        <label class="field">
+          <span>监听端口</span>
+          <input type="number" id="setPort" min="1" max="65535" />
+        </label>
+        <label class="field">
+          <span>拦截响应</span>
+          <select id="setBlockMode">
+            <option value="nxdomain">NXDOMAIN（推荐，避免客户端重试）</option>
+            <option value="zero">0.0.0.0 / ::（零地址）</option>
+          </select>
+        </label>
+      </div>
+
+      <h4 class="sub-title">上游 DNS</h4>
+      <div class="mode-grid">
+        <label class="mode" data-upmode="custom">
+          <input type="radio" name="upmode" value="custom" />
+          <div>
+            <strong>自定义上游</strong>
+            <p>手动填写上游 DNS，行为固定、可复现。</p>
+          </div>
+        </label>
+        <label class="mode" data-upmode="system">
+          <input type="radio" name="upmode" value="system" />
+          <div>
+            <strong>跟随本机 DNS</strong>
+            <p>开启防护前先读取本机各网卡 DNS，作为上游；接管系统 DNS 时取接管前的备份值，避免解析成环。</p>
+          </div>
+        </label>
+      </div>
+
+      <div id="upCustom">
+        <label class="field wide">
+          <span>自定义上游（每行一个，可带端口）</span>
+          <textarea id="setUpstreams" class="small-area"></textarea>
+        </label>
+      </div>
+
+      <div id="upSystem" class="hidden">
+        <p class="hint">本机 DNS 在「开启防护 / 接管」之前读取一次并写入上游；之后即使网卡 DNS 被改成 127.0.0.1 也不影响。回环地址与自身监听地址会被自动剔除，读不到时回退到上面保存的自定义上游。</p>
+        <div class="row-gap" id="upEffective"></div>
+        <p class="hint" id="upSource">—</p>
+        <button class="ghost-btn" id="btnCaptureUpstreams">重新读取本机 DNS</button>
+      </div>
+
+      <div class="row-gap end">
+        <button class="ghost-btn" id="btnRestartCore">重启核心</button>
+        <button class="primary" id="btnSaveSettings">保存并应用</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <header class="card-head">
+        <h3>系统 DNS 接管</h3>
+        <span class="badge" id="takeoverBadge">未接管</span>
+      </header>
+      <p class="hint">接管会记录每块网卡原有的 DNS，再统一改为 127.0.0.1；还原时逐项恢复。需要管理员权限，且核心必须监听 53 端口——装了下面的「后台助手」之后，普通权限也能接管/还原，不再弹 UAC。</p>
+      <div class="adapter-list" id="adapterList">
+        <div class="empty small">检测中…</div>
+      </div>
+      <div class="row-gap end">
+        <button class="ghost-btn" id="btnReleaseDns">还原系统 DNS</button>
+        <button class="primary" id="btnTakeoverDns">接管系统 DNS</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <header class="card-head">
+        <h3>后台助手（免 UAC 接管）</h3>
+        <span class="badge" id="helperBadge">未安装</span>
+      </header>
+      <p class="hint">安装一次之后，面板就能以普通权限完成「切 53 端口 + 接管系统 DNS / 还原」，不再每次弹 UAC。助手是一个 SYSTEM 身份的开机计划任务，常驻在命名管道 <code>\\.\pipe\ShieldDNS-DNS-Helper</code> 上，只接受当前用户、且只响应接管/还原/查询三件事。安装这一步需要管理员权限（会弹一次 UAC），之后一直免弹。</p>
+      <dl class="kv">
+        <div><dt>助手状态</dt><dd id="kvHelper">—</dd></div>
+      </dl>
+      <div class="row-gap end">
+        <button class="ghost-btn" id="btnHelperStart">重启助手</button>
+        <button class="ghost-btn" id="btnHelperOff">卸载助手</button>
+        <button class="primary" id="btnHelperOn">安装后台助手</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <header class="card-head">
+        <h3>异常还原保护（看门狗）</h3>
+        <span class="badge" id="guardBadge">未注册</span>
+      </header>
+      <p class="hint">注册一个计划任务（SYSTEM 身份 + 最高权限）。触发时机不再死等固定秒数：开机 20 秒、登录 10 秒，以及 Windows 判定「网络已连接」时（NetworkProfile 事件 10000，延迟 5 秒）立刻兜一次，登录后每 15 分钟再复查。它只做一件事：如果网卡 DNS 仍指向 127.0.0.1、而 127.0.0.1 上没有 DNS 应答（说明核心异常退出或重启后没起来），就按 <code>dns_backup.json</code> 还原原 DNS。核心正常应答时它什么都不做，所以重复触发无害，正常退出也不必注销任务。注册需要管理员权限。</p>
+      <dl class="kv">
+        <div><dt>任务状态</dt><dd id="kvGuard">—</dd></div>
+      </dl>
+      <div class="row-gap end">
+        <button class="ghost-btn" id="btnGuardTest">立即测试</button>
+        <button class="ghost-btn" id="btnGuardOff">注销任务</button>
+        <button class="primary" id="btnGuardOn">注册保护任务</button>
+      </div>
+      <div class="row-gap" style="margin-top:16px">
+        <label class="check"><input type="checkbox" id="chkAutoStart" /><span>开机自动启动面板（写入当前用户启动项）</span></label>
+      </div>
+    </div>
+
+    <div class="card">
+      <header class="card-head"><h3>应用与运行环境</h3></header>
+      <dl class="kv">
+        <div><dt>核心进程</dt><dd id="kvCore">—</dd></div>
+        <div><dt>核心路径</dt><dd id="kvCorePath">—</dd></div>
+        <div><dt>权限</dt><dd id="kvAdmin">—</dd></div>
+        <div><dt>数据目录</dt><dd id="kvData">—</dd></div>
+        <div><dt>配置文件</dt><dd id="kvConfig">—</dd></div>
+        <div><dt>版本</dt><dd id="kvVersion">1.0.0</dd></div>
+      </dl>
+      <div class="row-gap end">
+        <button class="ghost-btn" id="btnElevate">以管理员身份重启</button>
+        <button class="ghost-btn" id="btnQuit2">退出应用</button>
+      </div>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span>ShieldDNS · Rust 核心 + Go 面板</span>
+    <span>规则来源：<a href="https://github.com/abclq/home-dns-adblock" target="_blank" rel="noopener">abclq/home-dns-adblock</a></span>
+  </footer>
+</main>
+
+<div class="toasts" id="toasts"></div>
+<script src="/app.js"></script>
+</body>
+</html>

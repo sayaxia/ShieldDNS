@@ -1,0 +1,24 @@
+[package]
+name = "shielddns-core"
+version = "0.1.0"
+edition = "2021"
+description = "ShieldDNS core - local DNS filtering engine with AdGuard-style filter subscriptions"
+
+[[bin]]
+name = "shielddns-core"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "net", "time", "sync", "fs", "io-util"] }
+hickory-proto = "0.24"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "deflate", "brotli"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
