@@ -18,6 +18,7 @@ var (
 	procSetWindowPos         = modUser32.NewProc("SetWindowPos")
 	procSystemParametersInfo = modUser32.NewProc("SystemParametersInfoW")
 	procGetWindowRect        = modUser32.NewProc("GetWindowRect")
+	procIsIconic             = modUser32.NewProc("IsIconic")
 )
 
 const (
@@ -33,8 +34,9 @@ const (
 	swpNoSize      = 0x0001
 	swpNoMove      = 0x0002
 	swpShowWindow  = 0x0040
-	// SW_SHOWNORMAL：激活并以正常状态显示（SW_SHOW 会被启动信息覆盖成最小化）
+	// SW_SHOWNORMAL：激活并以正常状态显示
 	swShowNormal = 1
+	swRestore    = 9
 	swpNoZOrder    = 0x0004
 	swpNoActivate  = 0x0010
 
@@ -346,10 +348,15 @@ func (w *Window) Show() {
 	w.fitOnce.Do(func() {
 		fitWindowToDPI(hwnd, true)
 	})
-	// 首次 ShowWindow 会沿用进程启动时的 STARTUPINFO，某些启动方式下会被当成「最小化」，
-	// 窗口直接落到 (-32000,-32000) 那种屏幕外状态。这里显式要求正常显示，
-	// 再用 SWP_SHOWWINDOW 强制定位到屏幕中央。
+	// 进程的第一次 ShowWindow 由 STARTUPINFO 决定状态（父进程用「最小化/隐藏」方式拉起时，
+	// 传进来的 SW_SHOWNORMAL 会被丢弃，窗口直接变成最小化，看起来像启动后立刻消失）。
+	// 所以这张窗口的第一次显示调用当作「吃掉」这次覆盖，第二次才真正按参数执行，
+	// 最后再用 IsIconic 兜一次 SW_RESTORE。
 	procShowWindow.Call(hwnd, swShowNormal)
+	procShowWindow.Call(hwnd, swShowNormal)
+	if r, _, _ := procIsIconic.Call(hwnd); r != 0 {
+		procShowWindow.Call(hwnd, swRestore)
+	}
 	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
 		swpNoSize|swpNoMove|swpNoZOrder|swpShowWindow)
 	procSetForegroundWin.Call(hwnd)
