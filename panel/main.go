@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -22,7 +23,15 @@ var webAssets embed.FS
 var (
 	procCreateMutexW = windows.NewLazySystemDLL("kernel32.dll").NewProc("CreateMutexW")
 	mutexHandle      windows.Handle
+
+	// uiReady 在页面画完首帧后关闭：在那之前窗口一直藏着，避免先露出一块白底。
+	uiReady     = make(chan struct{})
+	uiReadyOnce sync.Once
 )
+
+func markUIReady() {
+	uiReadyOnce.Do(func() { close(uiReady) })
+}
 
 func main() {
 	showWindow := flag.Bool("elevated", false, "以管理员身份启动（内部使用）")
@@ -144,6 +153,17 @@ func main() {
 		select {}
 	}
 	app.win = win
+	// 窗口此刻是隐藏的：等页面首帧画出来（/panel/ready）再露面；2 秒兜底，
+	// 免得页面加载失败时窗口永远不出现。
+	go func() {
+		select {
+		case <-uiReady:
+			panelLog("页面首帧完成，显示窗口")
+		case <-time.After(2 * time.Second):
+			panelLog("等待页面首帧超时（2s），直接显示窗口")
+		}
+		win.Show()
+	}()
 	win.Run()
 	app.quit()
 }

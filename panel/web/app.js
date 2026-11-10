@@ -849,10 +849,23 @@ async function tick() {
 async function boot() {
   bind();
   await refreshStatus();
+  // 首屏已有内容就先让窗口露面：后面的列表/信息请求继续在后台跑，不拖慢启动观感
+  signalFirstPaint();
   await Promise.all([refreshRecent(), refreshTop(), loadInfo()]);
   await loadFilters();
   checkUpdate(false, true);
   setInterval(tick, 2000);
+}
+
+// 首帧画出来后通知主程序显示窗口：窗口在收到这个信号之前一直是隐藏的，
+// 这样启动时不会先看到一块白色（WebView2 默认背景色）再看到内容。
+function signalFirstPaint() {
+  const done = () => fetch("/panel/ready", { method: "POST" }).catch(() => {});
+  if (window.requestAnimationFrame) {
+    requestAnimationFrame(() => requestAnimationFrame(done));
+  } else {
+    setTimeout(done, 50);
+  }
 }
 
 document.addEventListener("DOMContentLoaded", boot);

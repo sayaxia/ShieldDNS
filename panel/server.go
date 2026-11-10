@@ -143,6 +143,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func (a *App) newMux() http.Handler {
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("/panel/ready", func(w http.ResponseWriter, r *http.Request) {
+		// 页面画完首帧后打这个点，主程序收到才把窗口显示出来
+		markUIReady()
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		cfg := loadConfig()
 		target, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", cfg.ControlPort))

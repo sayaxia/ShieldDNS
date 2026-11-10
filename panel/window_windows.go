@@ -14,6 +14,7 @@ var (
 	procSetWindowLongPtrW    = modUser32.NewProc("SetWindowLongPtrW")
 	procCallWindowProcW      = modUser32.NewProc("CallWindowProcW")
 	procGetDpiForWindow      = modUser32.NewProc("GetDpiForWindow")
+	procGetDpiForSystem      = modUser32.NewProc("GetDpiForSystem")
 	procSetWindowPos         = modUser32.NewProc("SetWindowPos")
 	procSystemParametersInfo = modUser32.NewProc("SystemParametersInfoW")
 	procGetWindowRect        = modUser32.NewProc("GetWindowRect")
@@ -223,12 +224,33 @@ func enforceWindowConstraints(hwnd uintptr) {
 		swpNoZOrder|swpNoActivate)
 }
 
-// fitWindowToDPI 按当前显示器缩放比例反算窗口的物理尺寸。
+// initialWindowPixels 在建窗之前算出“按系统缩放应有的物理尺寸”。
 // CreateWindow/SetWindowPos 收的是物理像素，而页面布局用的是 CSS 像素：
-// 175% 缩放下如果还按 1220×820 物理像素建窗，WebView2 只有约 697×469 个 CSS 像素，
-// 侧栏、卡片、表格全被挤变形。这里按 dpi/96 放大，并整体收敛到工作区 92% 以内
-// （收敛时两轴等比缩，比例不会走样）。
+// 175% 缩放下如果按逻辑尺寸直接建窗，WebView2 只有约 960×720 个物理像素，
+// 页面会被压小，随后再放大又会出现窗口跳动与白底重绘，所以一开始就按真实尺寸建。
+func initialWindowPixels() (int, int) {
+	scale := 1.0
+	if dpi, _, _ := procGetDpiForSystem.Call(); dpi != 0 {
+		scale = float64(dpi) / 96.0
+	}
+	w := float64(baseLogicalWidth) * scale
+	h := float64(baseLogicalHeight) * scale
+	var wa winRect
+	if ok, _, _ := procSystemParametersInfo.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&wa)), 0); ok != 0 {
+		workW := float64(wa.Right - wa.Left)
+		workH := float64(wa.Bottom - wa.Top)
+		if workW > 0 && workH > 0 {
+			factor := math.Min(1.0, math.Min(workW*0.92/w, workH*0.92/h))
+			w *= factor
+			h *= factor
+		}
+	}
+	return int(math.Round(w)), int(math.Round(h))
+}
+
+// fitWindowToDPI 按当前显示器缩放比例反算窗口的物理尺寸。
 // center=true 时居中（首次显示）；false 时只改尺寸、保持左上角（跨屏拖动时用）。
+// 尺寸已经正确时 SetWindowPos 不会造成可见变化，正常启动只用来兜一次底。
 func fitWindowToDPI(hwnd uintptr, center bool) {
 	if hwnd == 0 {
 		return
@@ -268,14 +290,17 @@ func fitWindowToDPI(hwnd uintptr, center bool) {
 }
 
 func NewWindow(url string, iconID uint) (*Window, error) {
+	// 建窗之前就按系统缩放算出最终物理尺寸：如果先按逻辑尺寸建窗、显示之后再
+	// SetWindowPos 放大，用户会看到窗口“先小后跳”，跳的中间还是 WebView2 的白色底。
+	w0, h0 := initialWindowPixels()
 	wv := webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
 		AutoFocus: true,
 		DataPath:  DataDir() + "\\webview2",
 		WindowOptions: webview2.WindowOptions{
 			Title:  "ShieldDNS · DNS 广告拦截",
-			Width:  baseLogicalWidth,
-			Height: baseLogicalHeight,
+			Width:  uint(w0),
+			Height: uint(h0),
 			IconId: iconID,
 			Center: true,
 		},
@@ -285,6 +310,9 @@ func NewWindow(url string, iconID uint) (*Window, error) {
 	}
 	win := &Window{wv: wv, hwnd: uintptr(wv.Window())}
 	if win.hwnd != 0 {
+		// 库建完窗就 ShowWindow 了，此时 WebView2 还没创建、页面更没开始加载，
+		// 客户区是窗口类的白底。先藏起来，等页面首帧渲染完再叫 Show()。
+		procShowWindow.Call(win.hwnd, swHide)
 		old, _, _ := procSetWindowLongPtrW.Call(win.hwnd, ^uintptr(3), wndProcAddr) // GWLP_WNDPROC = -4
 		winCtx.old = old
 		win.oldProc = old
