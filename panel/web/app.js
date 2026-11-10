@@ -458,16 +458,16 @@ function renderInfo(info, st) {
   $("upCustom").classList.toggle("hidden", !custom);
   $("upSystem").classList.toggle("hidden", custom);
 
-  const eff = info.upstreams || [];
-  $("upEffective").innerHTML = eff.length
-    ? eff.map((u) => `<span class="chip soft">${esc(u)}</span>`).join("")
-    : '<span class="chip bad"><i class="dot"></i><span>没有可用的上游</span></span>';
-  // 卡片上只留“最近读取时间”，网卡清单、是否走了备用公共 DNS 这些细节不铺在这里
+  // 卡片上只留“最近读取时间”，上游 IP 清单、网卡清单这些细节不铺在这里；
+  // 只有真的一个上游都没有时才提示，避免问题被藏起来
+  const effUp = info.upstreams || [];
   setText(
     "upSource",
-    info.upstreamCapturedAt
-      ? `读取于 ${shortStamp(info.upstreamCapturedAt)}`
-      : "尚未读取本机 DNS"
+    effUp.length
+      ? info.upstreamCapturedAt
+        ? `读取于 ${shortStamp(info.upstreamCapturedAt)}`
+        : "尚未读取本机 DNS"
+      : "没有可用的上游，请检查本机 DNS 设置"
   );
 
   const customList = info.customUpstreams && info.customUpstreams.length ? info.customUpstreams : info.upstreams || [];
