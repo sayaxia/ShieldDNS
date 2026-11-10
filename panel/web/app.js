@@ -58,6 +58,18 @@ function duration(sec) {
   return `${Math.floor(sec / 86400)} 天 ${Math.floor((sec % 86400) / 3600)} 小时`;
 }
 
+// "2026-11-10 19:41:22" → 当天只留 "19:41"，隔天补上日期
+function shortStamp(text) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/.exec(String(text || ""));
+  if (!m) return String(text || "");
+  const now = new Date();
+  const sameDay =
+    Number(m[1]) === now.getFullYear() &&
+    Number(m[2]) === now.getMonth() + 1 &&
+    Number(m[3]) === now.getDate();
+  return sameDay ? `${m[4]}:${m[5]}` : `${m[2]}-${m[3]} ${m[4]}:${m[5]}`;
+}
+
 function toast(text, type = "ok") {
   const box = $("toasts");
   const el = document.createElement("div");
@@ -450,11 +462,12 @@ function renderInfo(info, st) {
   $("upEffective").innerHTML = eff.length
     ? eff.map((u) => `<span class="chip soft">${esc(u)}</span>`).join("")
     : '<span class="chip bad"><i class="dot"></i><span>没有可用的上游</span></span>';
+  // 卡片上只留“最近读取时间”，网卡清单、是否走了备用公共 DNS 这些细节不铺在这里
   setText(
     "upSource",
-    info.upstreamSource
-      ? `来源：${info.upstreamSource}${info.upstreamCapturedAt ? " · " + info.upstreamCapturedAt : ""}`
-      : "尚未读取本机 DNS，保存设置时会自动读取"
+    info.upstreamCapturedAt
+      ? `读取于 ${shortStamp(info.upstreamCapturedAt)}`
+      : "尚未读取本机 DNS"
   );
 
   const customList = info.customUpstreams && info.customUpstreams.length ? info.customUpstreams : info.upstreams || [];
