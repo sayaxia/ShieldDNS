@@ -80,7 +80,7 @@
 8. 仓库 Settings → Secrets and variables → Actions：
    - Secrets：`SIGNPATH_API_TOKEN`
    - Variables：`SIGNPATH_ORG_ID`、`SIGNPATH_PROJECT_SLUG`、`SIGNPATH_POLICY_SLUG`、`SIGNPATH_ARTIFACT_CONFIG`
-9. 打 tag 触发 `.github/workflows/build.yml`：签名步骤已写好，变量为空时自动跳过。
+9. 打 tag 触发 `.github/workflows/build.yml`：签名步骤已写好，变量为空时自动跳过。变量填好后，流程是「上传未签名 zip → SignPath 签名 → **把 signed\ 里的签名包回填到 out\** → 解包校验每个 exe 的 `Status=Valid` → 上传产物 / 发 Release」，校验不通过会直接让 CI 失败，不会把未签名包发出去。
 
 ### 3.3 代价与限制（要接受再申请）
 

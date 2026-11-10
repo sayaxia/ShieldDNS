@@ -82,6 +82,34 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: signed
 
+      # 签名产物默认落在 signed\，必须回填到 out\ 才能被下面的上传/发布用上，
+      # 否则 Release 里发的仍然是未签名包。
+      - name: 用签名包替换未签名包
+        if: vars.SIGNPATH_ORG_ID != ''
+        shell: pwsh
+        run: |
+          $zips = Get-ChildItem -Path signed -Filter *.zip -Recurse -File
+          if (-not $zips) { throw '签名产物目录 signed\ 里没有 zip，签名流程可能失败' }
+          foreach ($z in $zips) {
+            Copy-Item -LiteralPath $z.FullName -Destination (Join-Path 'out' $z.Name) -Force
+            Write-Host "已回填签名包: $($z.Name) ($($z.Length) 字节)"
+          }
+
+      - name: 校验签名有效性
+        if: vars.SIGNPATH_ORG_ID != ''
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path out -Filter *.zip -File | Select-Object -First 1
+          $tmp = Join-Path $env:RUNNER_TEMP 'sigcheck'
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $tmp -Force
+          $targets = Get-ChildItem -Path $tmp -Filter *.exe -Recurse -File
+          if (-not $targets) { throw '签名包里没有找到 exe' }
+          foreach ($exe in $targets) {
+            $sig = Get-AuthenticodeSignature -LiteralPath $exe.FullName
+            if ($sig.Status -ne 'Valid') { throw "签名无效: $($exe.Name) -> $($sig.Status) $($sig.StatusMessage)" }
+            Write-Host "签名有效: $($exe.Name) <- $($sig.SignerCertificate.Subject)"
+          }
+
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
