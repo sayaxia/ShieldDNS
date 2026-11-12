@@ -239,7 +239,7 @@ WebView2 的两个行为在原库上做不到，因此直接改了 `panel\vendor
 
 ### 版本号与检查更新
 
-* 版本号只有一个来源：`panel/version.go` 里的 `appVersion`（当前 `1.0.3`）。界面右上角 chip、设置页「版本」行、`/system/info` 都读它；核心侧 `Cargo.toml` 的版本同步即可。
+* 版本号只有一个来源：`panel/version.go` 里的 `appVersion`（当前 `1.0.4`）。界面右上角 chip、设置页「版本」行、`/system/info` 都读它；核心侧 `Cargo.toml` 的版本同步即可。
 * 「检查更新」走 `GET /system/update`：请求 `https://api.github.com/repos/sayaxia/ShieldDNS/releases/latest`，比对 tag（如 `v0.1.2`）与本地版本，按数字分段比较（`0.1.1` vs `0.1.2`、`0.10.0` 都能正确排序）。
 * 结果里带 `releaseURL`、`downloadURL`（优先 `*win-x64*.zip` 资产）与资产体积；有新版时界面放出「立即更新」和「发布页」两个按钮。
 * **应用内自动更新**：`POST /system/update/apply` 让面板自己下载 Release 压缩包、解压校验后替换 `ShieldDNS.exe` 与 `core\shielddns-core.exe`，然后拉起新实例并退出当前进程，用户不用去浏览器下载解压。
@@ -549,25 +549,23 @@ python scripts\verify_core.py 53 5399
 
 ## 16. 版本记录
 
-### 1.0.3v2（测试版）
+### 1.0.4
 
-**重启接力不再弹 ping 黑框**
+**更新自己请求提权 + 重启接力不再弹黑框**
 
-* 起因：更新完会冒出一个黑框在跑 `ping 127.0.0.1`。根因不是「延迟写法难看」，而是启动器用了 `DETACHED_PROCESS` 起 cmd——cmd 没有控制台，它拉起的 `ping` 拿不到可继承的控制台，就自己新建一个可见窗口。
-* 现在去掉临时 `.cmd` 和 `ping`：`launchAfterExit` 直接 `exec` 新 exe（同样 `DETACHED_PROCESS` + `HideWindow`），额外传 `--wait-pid <旧 pid>`；新进程在 `acquireSingleInstance` 之前调 `waitForProcessExit(pid, 20s)`，内部是 `OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject` 内核等待，进程一退出立即返回，不再靠猜测的固定秒数。
-* 手写更新脚本 `update.cmd` 里的 `ping -n 4 127.0.0.1 >nul` 一并换成 `choice /t 4 /d y /n >nul`（同为系统自带、但完全静默，不产生子进程）。
-* 新增两个测试：等 0.9 秒的子进程必须等满（不能提前返回，否则会撞互斥体）、等一个不会退出的进程必须按 timeout 收手（不能卡死启动）。
+* 之前装在 `Program Files` 又是普通权限时，点「立即更新」只会得到一句「替换主程序失败（可能没有写入权限，试试『以管理员身份重启』后再更新）」——把活推给用户。现在更新前先做写入探针（`installDirWritable`）：在安装目录建 `.shielddns-write-probe` 再删掉，只认实测结果，不看是否管理员——便携目录本来可写就不该白弹一次 UAC。
+* 不可写时的提权链路：保存 `pending_update.json`（zip 路径 + 标签）→ `setUpdateStat("elevate", …)` → `Elevate("")`（`ShellExecute` + `runas`）→ `releaseSingleInstance()` → 200 ms 后 `quit()`。这里必须先交出单实例互斥体，否则提权后的新实例会被自己的旧实例挡在门外。
+* 提权后的新实例在 `startServer` 之后调 `resumePendingUpdate()`：读待办、校验 zip 还在、再确认一次可写，然后复用同一份 zip 装完并重启。启动清理 `DataDir()\update` 时若发现待办就跳过，不会把要用的包删掉；替换成功后再清待办，避免重启后的新实例把它当成未完成任务、凭空报一条失败。
+* 用户取消 UAC（`ShellExecute` 返回 1223）→ 清待办、报「提权请求没成功」，当前实例继续运行，不会变成「程序关掉了、什么都没发生」。重试仍失败则提示改用发布包里的 `update.cmd`。
+* 失败文案改了：既然先做过写入探针，走到 `replaceFile` 失败基本是安全软件/索引服务锁文件，不再往「以管理员身份重启」上引。
+* **重启接力不再经 cmd**：更新完曾经会冒出一个黑框在跑 `ping 127.0.0.1`。根因不是延迟写法难看，而是启动器用 `DETACHED_PROCESS` 起 cmd，cmd 没有控制台，它拉起的 `ping` 拿不到可继承的控制台就自建一个可见窗口。现在 `launchAfterExit` 直接 `exec` 新 exe（同样 `DETACHED_PROCESS` + `HideWindow`），额外传 `--wait-pid <旧 pid>`；新进程在 `acquireSingleInstance` 之前调 `waitForProcessExit(pid, 20s)`——`OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject` 内核等待，旧进程一退出立刻继续，不再靠猜的固定秒数。旧句柄打不开（进程已走）就直接往下走，互斥体那 15 秒等待仍是兜底。
+* 手写更新器 `scripts/update.cmd` 里的 `ping -n 4 127.0.0.1 >nul` 一并换成 `choice /t 4 /d y /n >nul`：同为系统自带，但完全静默、不产生子进程。
+* 新增测试：待办读写 / 坏 JSON 不采纳 / 包丢了清待办 / 写入探针在受保护目录必须为假 / 等 0.9 秒的子进程必须等满（提前返回会撞互斥体）/ 等不会退出的进程必须按 timeout 收手（不能卡死启动）。
 
-### 1.0.3v1（测试版）
+**发布**
 
-**更新自己请求提权**
-
-* 之前装在 `Program Files` 又是普通权限时，点「立即更新」只会得到一句「替换主程序失败（可能没有写入权限，试试『以管理员身份重启』后再更新）」——把活推给用户。现在更新前先做写入探针（`installDirWritable`），只认实测结果，不看是否管理员：便携目录本来可写就不该弹 UAC。
-* 不可写时走提权链路：保存 `pending_update.json`（zip 路径 + 标签）→ `setUpdateStat("elevate", …)` 让界面显示「需要管理员权限：正在请求提权」→ `Elevate("")`（ShellExecute `runas`）→ `releaseSingleInstance()` → 退出当前实例（200 ms 后 `quit()`）。
-* 提权后的新实例在 `startServer` 之后调用 `resumePendingUpdate()`：读待办、校验包还在、再确认一次可写、提高 `Attempts` 后复用同一份 zip 走 `applyLocalPackageWithLabel`，装完照常重启。启动清理 `DataDir()\update` 时若发现有待办就跳过，避免把要用的 zip 删掉。
-* 用户取消 UAC（`ShellExecute` 返回 1223）→ 清待办、报「提权请求没成功」，当前实例继续跑，不会退化成「程序关掉了、什么都没发生」。
-* 自动更新与本地更新包共用这条链路；重试过仍失败则提示改用发布包里的 `update.cmd`。
-* 失败文案改了：既然先做过写入探针，走到 `replaceFile` 失败基本是杀软/索引锁文件，不再往「以管理员身份重启」上引。
+* 版本号 1.0.4（三处同步），Release 资产 `ShieldDNS-1.0.4-win-x64.zip`（含 `update.cmd`）。
+* 真机验证：普通权限装在 `Program Files`，点「从本地更新包更新」→ 弹 UAC → 允许后自动续跑并重启，全程无 ping 黑框。
 
 ### 1.0.3
 
