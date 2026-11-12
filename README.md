@@ -247,7 +247,7 @@ WebView2 的两个行为在原库上做不到，因此直接改了 `panel\vendor
   * 更新前先停核心，再还原系统 DNS（避免面板退出到新面板接管之间 53 没人监听、系统 DNS 还指 `127.0.0.1` 导致断网）；替换完成后停掉后台助手，由新面板启动时用新 exe 重新拉起——否则助手会一直跑旧镜像并占着旧文件。更新后防护回到待命状态，需要手动再开。
   * 进度通过 `GET /system/update/status`（`{running,stage,percent,message,version,error,done}`）给界面轮询；下载先写 `.part`，长度对不上就当失败重下，不会留下半截包。
   * 解压做了 zip-slip 过滤，并且要求包里确实有体积合理的 `ShieldDNS.exe` 和 `core\shielddns-core.exe`，否则不动现有文件。
-  * 装在没有写入权限的目录（如 `Program Files`）时会失败并提示先「以管理员身份重启」。
+  * **装在受保护目录时会自己请求提权，不再让你去手动重启**：真正动手之前先做写入探针（在安装目录里建一个 `.shielddns-write-probe` 再删掉），写不了就判断为「需要管理员」。此时把这份 zip 记进 `%LOCALAPPDATA%\ShieldDNS\pending_update.json`，用 `ShellExecute` 的 `runas` 拉起管理员实例，旧实例让出单实例互斥体后退出；提权后的新实例启动时读到待办，直接用同一份 zip 装完再重启。用户取消 UAC 则清掉待办、当前实例继续运行，界面照旧给更新入口。
 * **本地更新包（GitHub 连不上时用这条）**：`POST /system/update/local`，请求体就是 Release 的 zip 原始字节（上限 200 MB）。设置页「应用与运行环境 → 从本地更新包更新」选一个下载好的 `ShieldDNS-<version>-win-x64.zip`（不用解压），走的是和自动更新完全相同的安装流程（改名替换 → 换核心 → 停助手 → 重启），所以不用自己杀进程或覆盖 `Program Files` 里的文件。
 * **离线手动更新（给还装着旧版本的用户）**：Release 包里带一个 `update.cmd`。把 zip 解压后，右键 `update.cmd`「以管理员身份运行」即可：它先 `taskkill` 掉面板与 SYSTEM 助手，再把旧 exe 改名成 `.old-<随机数>` 备份、复制新文件、启动新版本。批处理不依赖 PowerShell，不会触发安全软件对「PowerShell 执行可疑脚本」的拦截。若安装在非默认目录，直接把安装目录拖到 `update.cmd` 上，运行时会用它作目标目录。
 * 结果缓存 10 分钟（`?force=1` 跳过），界面启动时静默查一次，只把结论写进设置页，不弹 toast。
@@ -547,6 +547,17 @@ python scripts\verify_core.py 53 5399
 ---
 
 ## 16. 版本记录
+
+### 1.0.3v1（测试版）
+
+**更新自己请求提权**
+
+* 之前装在 `Program Files` 又是普通权限时，点「立即更新」只会得到一句「替换主程序失败（可能没有写入权限，试试『以管理员身份重启』后再更新）」——把活推给用户。现在更新前先做写入探针（`installDirWritable`），只认实测结果，不看是否管理员：便携目录本来可写就不该弹 UAC。
+* 不可写时走提权链路：保存 `pending_update.json`（zip 路径 + 标签）→ `setUpdateStat("elevate", …)` 让界面显示「需要管理员权限：正在请求提权」→ `Elevate("")`（ShellExecute `runas`）→ `releaseSingleInstance()` → 退出当前实例（200 ms 后 `quit()`）。
+* 提权后的新实例在 `startServer` 之后调用 `resumePendingUpdate()`：读待办、校验包还在、再确认一次可写、提高 `Attempts` 后复用同一份 zip 走 `applyLocalPackageWithLabel`，装完照常重启。启动清理 `DataDir()\update` 时若发现有待办就跳过，避免把要用的 zip 删掉。
+* 用户取消 UAC（`ShellExecute` 返回 1223）→ 清待办、报「提权请求没成功」，当前实例继续跑，不会退化成「程序关掉了、什么都没发生」。
+* 自动更新与本地更新包共用这条链路；重试过仍失败则提示改用发布包里的 `update.cmd`。
+* 失败文案改了：既然先做过写入探针，走到 `replaceFile` 失败基本是杀软/索引锁文件，不再往「以管理员身份重启」上引。
 
 ### 1.0.3
 

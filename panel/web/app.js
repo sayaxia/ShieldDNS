@@ -616,7 +616,7 @@ async function applyUpdate() {
   const openBtn = $("btnOpenRelease");
   const text = $("updateText");
   if (!state.update || !state.update.hasUpdate) return;
-  if (!confirm(`要更新到 v${state.update.latest} 吗？更新后程序会自动重启，防护会回到待命状态，需要手动再开。`)) return;
+  if (!confirm(`要更新到 v${state.update.latest} 吗？更新后程序会自动重启，防护会回到待命状态，需要手动再开。\n如果装在 Program Files 且当前不是管理员，会弹一次管理员授权，允许后自动继续。`)) return;
   if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = "更新中…"; }
   if (openBtn) openBtn.classList.add("hidden");
   try {
@@ -635,6 +635,7 @@ async function applyUpdate() {
   }
   // 轮询进度；进程重启后请求会失败，这属于正常收尾
   let stopped = false;
+  let elevating = false;
   const timer = setInterval(async () => {
     if (stopped) return;
     try {
@@ -647,6 +648,17 @@ async function applyUpdate() {
         if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = "立即更新"; }
         return;
       }
+      // 后端判断安装目录写不了，已经发起 UAC：本窗口马上要退出，
+      // 别把随后的连接中断说成「更新完成，正在重启」
+      if (st.stage === "elevate") {
+        elevating = true;
+        stopped = true;
+        clearInterval(timer);
+        text.textContent = st.message || "需要管理员权限：正在请求提权…";
+        toast("请在管理员授权弹窗里点「是」，授权后会自动继续更新", "ok");
+        if (applyBtn) applyBtn.textContent = "等待授权…";
+        return;
+      }
       if (st.message) text.textContent = st.message;
       if (st.done) {
         stopped = true;
@@ -656,7 +668,7 @@ async function applyUpdate() {
     } catch (e) {
       stopped = true;
       clearInterval(timer);
-      text.textContent = "更新完成，程序正在重启…";
+      if (!elevating) text.textContent = "更新完成，程序正在重启…";
     }
   }, 700);
 }
@@ -675,7 +687,7 @@ async function localUpdate(file) {
   const text = $("updateText");
   const note = $("updateNote");
   if (note) note.classList.remove("hidden");
-  if (!confirm(`要用本地包「${file.name}」更新吗？更新后程序会自动重启，防护会回到待命状态，需要手动再开。`)) return;
+  if (!confirm(`要用本地包「${file.name}」更新吗？更新后程序会自动重启，防护会回到待命状态，需要手动再开。\n如果装在 Program Files 且当前不是管理员，会弹一次管理员授权，允许后自动继续。`)) return;
   if (text) text.textContent = `正在上传本地更新包 ${(file.size / 1048576).toFixed(1)} MB…`;
   try {
     const res = await fetch("/system/update/local", {
@@ -695,6 +707,7 @@ async function localUpdate(file) {
   if (text) text.textContent = "已开始替换文件…";
   // 和自动更新一样轮询进度；进程重启后请求断开属于正常收尾
   let stopped = false;
+  let elevating = false;
   const timer = setInterval(async () => {
     if (stopped) return;
     try {
@@ -706,6 +719,14 @@ async function localUpdate(file) {
         toast(st.error, "err");
         return;
       }
+      if (st.stage === "elevate") {
+        elevating = true;
+        stopped = true;
+        clearInterval(timer);
+        if (text) text.textContent = st.message || "需要管理员权限：正在请求提权…";
+        toast("请在管理员授权弹窗里点「是」，授权后会自动继续更新", "ok");
+        return;
+      }
       if (st.message && text) text.textContent = st.message;
       if (st.done) {
         stopped = true;
@@ -715,7 +736,7 @@ async function localUpdate(file) {
     } catch (e) {
       stopped = true;
       clearInterval(timer);
-      if (text) text.textContent = "更新完成，程序正在重启…";
+      if (!elevating) text.textContent = "更新完成，程序正在重启…";
     }
   }, 700);
 }

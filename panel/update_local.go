@@ -5,6 +5,7 @@ package main
 // 用户不用自己去杀进程、也不要手动覆盖 Program Files 里的文件。
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -79,6 +80,10 @@ func (a *App) handleUpdateLocal(w http.ResponseWriter, r *http.Request) {
 }
 
 func applyLocalPackage(a *App, zipPath string) {
+	applyLocalPackageWithLabel(a, zipPath, "本地包")
+}
+
+func applyLocalPackageWithLabel(a *App, zipPath, label string) {
 	stage := filepath.Join(DataDir(), "update", "stage-local")
 	_ = os.RemoveAll(stage)
 	setUpdateStat("extract", 0, "解压本地更新包")
@@ -88,7 +93,16 @@ func applyLocalPackage(a *App, zipPath string) {
 		failUpdateStat(err, "这个文件不是有效的更新包（zip 打不开）："+err.Error())
 		return
 	}
-	if err := installStaged(a, stage, "本地包"); err != nil {
+	// 装在 Program Files 且当前只是普通权限时，这里会记录待办、请求 UAC、退出本实例，
+	// 由提权后的新实例从同一份 zip 继续装完。
+	if err := a.ensureCanInstall(zipPath, label); err != nil {
+		if errors.Is(err, errElevateStarted) {
+			return
+		}
+		failUpdateStat(err, err.Error())
+		return
+	}
+	if err := installStaged(a, stage, label); err != nil {
 		failUpdateStat(err, err.Error())
 	}
 }

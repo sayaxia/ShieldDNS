@@ -82,7 +82,10 @@ func main() {
 	// 这里清掉上一次的遗留（这次自己可能东占着旧镜像，删不掉就后台重试）。
 	if exe, err := os.Executable(); err == nil {
 		cleanupOldBinaries(exe)
-		_ = os.RemoveAll(filepath.Join(DataDir(), "update"))
+		// 有待续跑的更新时不能清 update 目录：里面就是那份要接着装的 zip
+		if _, pending := loadPendingUpdate(); !pending {
+			_ = os.RemoveAll(filepath.Join(DataDir(), "update"))
+		}
 	}
 
 	cfg := loadConfig()
@@ -130,6 +133,10 @@ func main() {
 		os.Exit(1)
 	}
 	app.panelPort = port
+
+	// 上一次因为改不了安装目录而请求了提权：现在这个实例若真有管理员权限，
+	// 就把那份 zip 接着装完（用户点完 UAC 不用再点第二次「立即更新」）。
+	app.resumePendingUpdate()
 
 	// 核心放到后台启动，失败也不阻塞界面。
 	// 端口不做任何自动回退：53 是唯一能被系统解析器命中的端口，换成别的端口只会

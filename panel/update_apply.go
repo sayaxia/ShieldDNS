@@ -9,6 +9,7 @@ package main
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -131,6 +132,15 @@ func applyUpdate(a *App, res updateResult) {
 		failUpdateStat(err, "解压失败："+err.Error())
 		return
 	}
+	// 解压完才动手之前先确认写得了安装目录：装在 Program Files 又只是普通权限时，
+	// 走提权分支（记录待办 + UAC + 本实例退出），而不是等到改名失败才报一句 Access denied。
+	if err := a.ensureCanInstall(zipPath, "v"+res.Latest); err != nil {
+		if errors.Is(err, errElevateStarted) {
+			return
+		}
+		failUpdateStat(err, err.Error())
+		return
+	}
 	if err := installStaged(a, stage, "v"+res.Latest); err != nil {
 		failUpdateStat(err, err.Error())
 	}
@@ -172,7 +182,9 @@ func installStaged(a *App, stage, label string) error {
 
 	setUpdateStat("replace", 40, "替换程序文件")
 	if err := replaceFile(newExe, exe); err != nil {
-		return fmt.Errorf("替换主程序失败（可能没有写入权限，试试「以管理员身份重启」后再更新）：%w", err)
+		// 走到这里说明权限已经够（ensureCanInstall 先做过写入探针），
+		// 再失败基本是杀软/索引锁着文件，别把用户往「以管理员身份重启」上引
+		return fmt.Errorf("替换主程序失败（文件被安全软件或索引服务锁住了，稍后重试或运行发布包里的 update.cmd）：%w", err)
 	}
 	if _, err := os.Stat(corePath); err == nil {
 		if err := replaceFile(newCore, corePath); err != nil {
