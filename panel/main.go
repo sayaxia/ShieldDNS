@@ -40,6 +40,7 @@ func main() {
 	helper := flag.Bool("helper", false, "后台助手模式：以 SYSTEM 常驻，提供免 UAC 的 DNS 接管通道（内部使用）")
 	dataDir := flag.String("data", "", "数据目录（看门狗/助手模式内部使用，计划任务以 SYSTEM 运行时必须指定）")
 	dnsTest := flag.Int("dns-selftest", 0, "诊断：在指定 InterfaceIndex 上测一遍「写 127.0.0.1 → 读回 → 恢复 DHCP → 读回」（内部使用，需要管理员）")
+	waitPid := flag.Int("wait-pid", 0, "先等这个进程退出再启动（更新后重启由自己接力，内部使用）")
 	flag.Parse()
 	_ = showWindow
 
@@ -74,6 +75,11 @@ func main() {
 		wait = 15 * time.Second
 	} else {
 		wait = 1500 * time.Millisecond
+	}
+	// 更新后的接力：上一个进程把文件换好、起我起来之后就退出了，
+	// 这里等它真的走掉（释放互斥体、WebView2 用户目录、53 端口），再继续启动。
+	if *waitPid > 0 {
+		waitForProcessExit(*waitPid, 20*time.Second)
 	}
 	acquireSingleInstance(wait)
 

@@ -250,6 +250,7 @@ WebView2 的两个行为在原库上做不到，因此直接改了 `panel\vendor
   * **装在受保护目录时会自己请求提权，不再让你去手动重启**：真正动手之前先做写入探针（在安装目录里建一个 `.shielddns-write-probe` 再删掉），写不了就判断为「需要管理员」。此时把这份 zip 记进 `%LOCALAPPDATA%\ShieldDNS\pending_update.json`，用 `ShellExecute` 的 `runas` 拉起管理员实例，旧实例让出单实例互斥体后退出；提权后的新实例启动时读到待办，直接用同一份 zip 装完再重启。用户取消 UAC 则清掉待办、当前实例继续运行，界面照旧给更新入口。
 * **本地更新包（GitHub 连不上时用这条）**：`POST /system/update/local`，请求体就是 Release 的 zip 原始字节（上限 200 MB）。设置页「应用与运行环境 → 从本地更新包更新」选一个下载好的 `ShieldDNS-<version>-win-x64.zip`（不用解压），走的是和自动更新完全相同的安装流程（改名替换 → 换核心 → 停助手 → 重启），所以不用自己杀进程或覆盖 `Program Files` 里的文件。
 * **离线手动更新（给还装着旧版本的用户）**：Release 包里带一个 `update.cmd`。把 zip 解压后，右键 `update.cmd`「以管理员身份运行」即可：它先 `taskkill` 掉面板与 SYSTEM 助手，再把旧 exe 改名成 `.old-<随机数>` 备份、复制新文件、启动新版本。批处理不依赖 PowerShell，不会触发安全软件对「PowerShell 执行可疑脚本」的拦截。若安装在非默认目录，直接把安装目录拖到 `update.cmd` 上，运行时会用它作目标目录。
+  * 重启接力不经过 cmd（`--wait-pid`）：替换完成后直接以 `DETACHED_PROCESS` 起新 exe，并把旧进程 pid 传给它；新进程在抢单实例互斥体之前，用 `OpenProcess` + `WaitForSingleObject` 等旧进程真的退出（上限 20 秒）。这样既精确又干净——上一版是写个临时 `.cmd`、在里面 `ping -n 6 127.0.0.1` 凑 5 秒，而 DETACHED 的 cmd 没有控制台，它拉起的 `ping` 会自己新建一个控制台窗口，更新完会留下一个黑框。
 * 结果缓存 10 分钟（`?force=1` 跳过），界面启动时静默查一次，只把结论写进设置页，不弹 toast。
 
 ---
@@ -547,6 +548,15 @@ python scripts\verify_core.py 53 5399
 ---
 
 ## 16. 版本记录
+
+### 1.0.3v2（测试版）
+
+**重启接力不再弹 ping 黑框**
+
+* 起因：更新完会冒出一个黑框在跑 `ping 127.0.0.1`。根因不是「延迟写法难看」，而是启动器用了 `DETACHED_PROCESS` 起 cmd——cmd 没有控制台，它拉起的 `ping` 拿不到可继承的控制台，就自己新建一个可见窗口。
+* 现在去掉临时 `.cmd` 和 `ping`：`launchAfterExit` 直接 `exec` 新 exe（同样 `DETACHED_PROCESS` + `HideWindow`），额外传 `--wait-pid <旧 pid>`；新进程在 `acquireSingleInstance` 之前调 `waitForProcessExit(pid, 20s)`，内部是 `OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject` 内核等待，进程一退出立即返回，不再靠猜测的固定秒数。
+* 手写更新脚本 `update.cmd` 里的 `ping -n 4 127.0.0.1 >nul` 一并换成 `choice /t 4 /d y /n >nul`（同为系统自带、但完全静默，不产生子进程）。
+* 新增两个测试：等 0.9 秒的子进程必须等满（不能提前返回，否则会撞互斥体）、等一个不会退出的进程必须按 timeout 收手（不能卡死启动）。
 
 ### 1.0.3v1（测试版）
 

@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -223,31 +224,25 @@ func installStaged(a *App, stage, label string) error {
 	return nil
 }
 
-// launchAfterExit 写一个临时 cmd 脚本并以 DETACHED_PROCESS 启动：延迟几秒后 start 新 exe。
-// 延迟是给旧进程留退出时间（释放互斥体、WebView2 用户目录、核心端口）。
+// launchAfterExit 直接起新 exe，让它自己等旧进程退出（--wait-pid <本进程 pid>）。
+//
+// 上一版是写个临时 .cmd、用 DETACHED_PROCESS 起 cmd、在脚本里 ping 几秒当延时。
+// 那套有两个毛病：cmd 没有控制台，它拉起的 ping 会自己新建一个控制台窗口，
+// 用户更新完就看见一个黑框「ping 127.0.0.1」；grep 起来的延时也不精确。
+// 现在延时由新进程自己用 WaitForSingleObject 等旧 pid 退出，不产生任何子进程和控制台。
 func launchAfterExit(exe, exeDir string) error {
-	shell := os.Getenv("ComSpec")
-	if shell == "" {
-		shell = filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe")
-	}
-	if _, err := os.Stat(shell); err != nil {
-		return fmt.Errorf("找不到 cmd.exe（%s）：%v", shell, err)
-	}
-	script := filepath.Join(os.TempDir(), "shielddns-restart.cmd")
-	content := "@echo off\r\n" +
-		"ping -n 6 127.0.0.1 >nul\r\n" +
-		"start \"\" /d \"" + exeDir + "\" \"" + exe + "\"\r\n" +
-		"del \"%~f0\"\r\n"
-	if err := os.WriteFile(script, []byte(content), 0o644); err != nil {
-		return err
-	}
-	// 注意：必须用绝对路径。本机 PATH 里没有 System32，裸名 cmd.exe 会直接报找不到。
-	cmd := exec.Command(shell, "/c", script)
+	cmd := exec.Command(exe, "--wait-pid", strconv.Itoa(os.Getpid()))
+	cmd.Dir = exeDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: 0x00000008, // DETACHED_PROCESS：不随父进程退出而被带走
 	}
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// 父进程一会儿就退出，没必要也不应该等它
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 func fileSize(p string) int64 {

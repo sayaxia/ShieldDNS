@@ -46,7 +46,7 @@ echo 安装目录：%DST%
 echo.
 echo [1/4] 停止 ShieldDNS（面板 + SYSTEM 后台助手）...
 taskkill /F /IM ShieldDNS.exe >nul 2>&1
-ping -n 4 127.0.0.1 >nul
+choice /t 4 /d y /n >nul
 
 set "STAMP=%RANDOM%%RANDOM%"
 echo [2/4] 备份并替换主程序...
