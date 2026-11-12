@@ -49,6 +49,25 @@ func TestPendingUpdateIgnoresGarbage(t *testing.T) {
 	}
 }
 
+// 待办指向的 zip 不在了（被清理/用户删了）时，启动不能对着空气装一遍，要清掉待办。
+func TestResumePendingUpdateDropsMissingZip(t *testing.T) {
+	t.Setenv("SHIELDDNS_DATA_DIR", t.TempDir())
+	if err := os.MkdirAll(DataDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := savePendingUpdate(pendingUpdate{ZipPath: filepath.Join(DataDir(), "update", "gone.zip"), Label: "v1.0.4"}); err != nil {
+		t.Fatal(err)
+	}
+	a := &App{core: NewCoreManager()}
+	a.resumePendingUpdate()
+	if _, ok := loadPendingUpdate(); ok {
+		t.Fatal("包不存在时不应该留下待办")
+	}
+	if updateApplyStat.Error == "" {
+		t.Fatal("应该给界面留一条可读的错误")
+	}
+}
+
 // 探针要真的反映「能不能写」：临时目录可以，系统受保护目录在普通权限下不行。
 func TestInstallDirWritable(t *testing.T) {
 	if !installDirWritable(t.TempDir()) {

@@ -209,6 +209,10 @@ func installStaged(a *App, stage, label string) error {
 	updateApplyStat.Done = true
 	updateApplyMu.Unlock()
 
+	// 文件已经换成新的了：把提权待办清掉。
+	// 留着它的话，重启后的新实例会把它当成「还没做完的更新」，凭空报一条失败。
+	clearPendingUpdate()
+
 	// 不能直接在这里起新实例：此刻自己还活着，单实例互斥体和 WebView2 用户目录
 	// 都还占着，新实例会因为抢不到这些资源而立刻退出（实测就是这么失败的）。
 	// 改成交给一个脱离父进程的小启动器，等当前进程退出后再拉起新 exe。
