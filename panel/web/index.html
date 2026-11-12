@@ -322,6 +322,11 @@
         <button class="primary compact hidden" id="btnApplyUpdate">立即更新</button>
         <button class="ghost-btn compact hidden" id="btnOpenRelease">发布页</button>
       </div>
+      <div class="row-gap">
+        <button class="ghost-btn compact" id="btnLocalUpdate">从本地更新包更新</button>
+        <span class="hint">GitHub 打不开时：下载 Release 的 zip（不用解压），选中后直接替换并重启，不必自己停进程或覆盖文件。</span>
+      </div>
+      <input type="file" id="localPkg" accept=".zip,application/zip" class="hidden" />
       <div class="row-gap end">
         <button class="ghost-btn" id="btnElevate">以管理员身份重启</button>
         <button class="ghost-btn" id="btnQuit2">退出应用</button>

@@ -53,6 +53,7 @@ jobs:
           Copy-Item dist\ShieldDNS.exe "out\$name\" -Force
           Copy-Item dist\core "out\$name\core" -Recurse -Force
           Copy-Item README.md, LICENSE "out\$name\" -Force
+          Copy-Item scripts\update.cmd "out\$name\" -Force
           Compress-Archive -Path "out\$name" -DestinationPath "out\$name.zip" -CompressionLevel Optimal
           echo "ASSET=out\$name.zip" >> $env:GITHUB_ENV
           echo "VERSION=$ver" >> $env:GITHUB_ENV

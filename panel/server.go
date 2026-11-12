@@ -170,6 +170,7 @@ func (a *App) newMux() http.Handler {
 	mux.HandleFunc("/system/port", a.handlePort)
 	mux.HandleFunc("/system/update", a.handleUpdate)
 	mux.HandleFunc("/system/update/apply", a.handleUpdateApply)
+	mux.HandleFunc("/system/update/local", a.handleUpdateLocal)
 	mux.HandleFunc("/system/update/status", a.handleUpdateStatus)
 	mux.HandleFunc("/system/openrelease", a.handleOpenRelease)
 	mux.HandleFunc("/system/elevate", a.handleElevate)

@@ -99,6 +99,8 @@ $coreExe = if ($DebugCore) {
     Join-Path $CoreDir 'target\release\shielddns-core.exe'
 }
 Copy-Item -LiteralPath $coreExe -Destination (Join-Path $DistDir 'core\shielddns-core.exe') -Force
+# 离线手动更新器：跟着产物一起放，GitHub 连不上的用户解压后右键管理员运行即可
+Copy-Item -LiteralPath (Join-Path $Root 'scripts\update.cmd') -Destination (Join-Path $DistDir 'update.cmd') -Force
 
 Write-Host ''
 Write-Host '构建完成，产物：' -ForegroundColor Green

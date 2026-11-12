@@ -131,21 +131,26 @@ func applyUpdate(a *App, res updateResult) {
 		failUpdateStat(err, "解压失败："+err.Error())
 		return
 	}
+	if err := installStaged(a, stage, "v"+res.Latest); err != nil {
+		failUpdateStat(err, err.Error())
+	}
+}
 
+// installStaged 是自动更新和「本地更新包」共用的安装步骤：
+// 从解压目录里找出 exe/core → 停核心、还原 DNS → 改名替换（运行中的 exe 只能改名）
+// → 停掉后台助手（让新面板用新 exe 重新拉起）→ 交给脱离父进程的启动器重启。
+func installStaged(a *App, stage, label string) error {
 	// Release 包外面套了一层目录（如 ShieldDNS-1.0.0-win-x64/），所以按文件名在
 	// 解压结果里递归找，而不是假定文件就在根上。
 	newExe := findFile(stage, "ShieldDNS.exe")
 	newCore := findFile(stage, "shielddns-core.exe")
 	if fileSize(newExe) < 1<<20 || fileSize(newCore) < 512<<10 {
-		failUpdateStat(fmt.Errorf("size check failed: %q %d / %q %d", newExe, fileSize(newExe), newCore, fileSize(newCore)),
-			"更新包内容不完整（找不到合理的 ShieldDNS.exe 或 core\\shielddns-core.exe）")
-		return
+		return fmt.Errorf("更新包内容不完整（找不到合理的 ShieldDNS.exe 或 core\\shielddns-core.exe，来自 %s）", label)
 	}
 
 	exe, err := os.Executable()
 	if err != nil {
-		failUpdateStat(err, "取不到当前程序路径："+err.Error())
-		return
+		return fmt.Errorf("取不到当前程序路径：%w", err)
 	}
 	exeDir := filepath.Dir(exe)
 	corePath := filepath.Join(exeDir, "core", "shielddns-core.exe")
@@ -167,13 +172,11 @@ func applyUpdate(a *App, res updateResult) {
 
 	setUpdateStat("replace", 40, "替换程序文件")
 	if err := replaceFile(newExe, exe); err != nil {
-		failUpdateStat(err, "替换主程序失败（可能没有写入权限，试试「以管理员身份重启」后再更新）："+err.Error())
-		return
+		return fmt.Errorf("替换主程序失败（可能没有写入权限，试试「以管理员身份重启」后再更新）：%w", err)
 	}
 	if _, err := os.Stat(corePath); err == nil {
 		if err := replaceFile(newCore, corePath); err != nil {
-			failUpdateStat(err, "主程序已更新，但核心替换失败："+err.Error())
-			return
+			return fmt.Errorf("主程序已更新，但核心替换失败：%w", err)
 		}
 	}
 
@@ -201,6 +204,7 @@ func applyUpdate(a *App, res updateResult) {
 		panelLog("更新后拉起新实例失败：%v", err)
 	}
 	a.quit()
+	return nil
 }
 
 // launchAfterExit 写一个临时 cmd 脚本并以 DETACHED_PROCESS 启动：延迟几秒后 start 新 exe。

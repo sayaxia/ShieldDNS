@@ -243,11 +243,13 @@ WebView2 的两个行为在原库上做不到，因此直接改了 `panel\vendor
 * 「检查更新」走 `GET /system/update`：请求 `https://api.github.com/repos/sayaxia/ShieldDNS/releases/latest`，比对 tag（如 `v0.1.2`）与本地版本，按数字分段比较（`0.1.1` vs `0.1.2`、`0.10.0` 都能正确排序）。
 * 结果里带 `releaseURL`、`downloadURL`（优先 `*win-x64*.zip` 资产）与资产体积；有新版时界面放出「立即更新」和「发布页」两个按钮。
 * **应用内自动更新**：`POST /system/update/apply` 让面板自己下载 Release 压缩包、解压校验后替换 `ShieldDNS.exe` 与 `core\shielddns-core.exe`，然后拉起新实例并退出当前进程，用户不用去浏览器下载解压。
-  * 替换用的是「旧文件改名 → 写新文件 → 失败回滚」：Windows 不允许覆盖正在运行的 exe，但允许给它改名（改名后的旧镜像留在 `.old` 里，下次启动时删）。
-  * 更新前先停核心，避免核心 exe 被占用；更新后程序按既有逻辑重启，防护回到待命状态，需要手动再开。
+  * 替换用的是「旧文件改名 → 写新文件 → 失败回滚」：Windows 不允许覆盖正在运行的 exe，但允许给它改名。旧镜像改名成 `ShieldDNS.exe.old-<时间戳>` 留作回滚备份，下次启动时清理；**备份名带时间戳而不是固定 `.old`**，因为后台助手是同一个 exe 的另一个进程，上一版的 `.old` 可能还被它开着、删不掉，固定名会让第二次更新卡在「先删旧备份」这一步。
+  * 更新前先停核心，再还原系统 DNS（避免面板退出到新面板接管之间 53 没人监听、系统 DNS 还指 `127.0.0.1` 导致断网）；替换完成后停掉后台助手，由新面板启动时用新 exe 重新拉起——否则助手会一直跑旧镜像并占着旧文件。更新后防护回到待命状态，需要手动再开。
   * 进度通过 `GET /system/update/status`（`{running,stage,percent,message,version,error,done}`）给界面轮询；下载先写 `.part`，长度对不上就当失败重下，不会留下半截包。
   * 解压做了 zip-slip 过滤，并且要求包里确实有体积合理的 `ShieldDNS.exe` 和 `core\shielddns-core.exe`，否则不动现有文件。
-  * 装在没有写入权限的目录（如 `Program Files`）时会失败并提示先「以管理员身份重启」；「发布页」按钮仍保留，用作手动兜底。
+  * 装在没有写入权限的目录（如 `Program Files`）时会失败并提示先「以管理员身份重启」。
+* **本地更新包（GitHub 连不上时用这条）**：`POST /system/update/local`，请求体就是 Release 的 zip 原始字节（上限 200 MB）。设置页「应用与运行环境 → 从本地更新包更新」选一个下载好的 `ShieldDNS-<version>-win-x64.zip`（不用解压），走的是和自动更新完全相同的安装流程（改名替换 → 换核心 → 停助手 → 重启），所以不用自己杀进程或覆盖 `Program Files` 里的文件。
+* **离线手动更新（给还装着旧版本的用户）**：Release 包里带一个 `update.cmd`。把 zip 解压后，右键 `update.cmd`「以管理员身份运行」即可：它先 `taskkill` 掉面板与 SYSTEM 助手，再把旧 exe 改名成 `.old-<随机数>` 备份、复制新文件、启动新版本。批处理不依赖 PowerShell，不会触发安全软件对「PowerShell 执行可疑脚本」的拦截。若安装在非默认目录，直接把安装目录拖到 `update.cmd` 上，运行时会用它作目标目录。
 * 结果缓存 10 分钟（`?force=1` 跳过），界面启动时静默查一次，只把结论写进设置页，不弹 toast。
 
 ---

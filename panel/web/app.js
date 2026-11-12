@@ -661,6 +661,65 @@ async function applyUpdate() {
   }, 700);
 }
 
+// 本地更新包：GitHub 连不上时把 Release 的 zip 下回来，选中它直接在应用内替换。
+// 后端走的是和自动更新同一套流程（改名替换 + 重启 + 换助手），所以不用自己杀进程。
+function pickLocalUpdate() {
+  const input = $("localPkg");
+  if (!input) return;
+  input.value = "";
+  input.click();
+}
+
+async function localUpdate(file) {
+  if (!file) return;
+  const text = $("updateText");
+  const note = $("updateNote");
+  if (note) note.classList.remove("hidden");
+  if (!confirm(`要用本地包「${file.name}」更新吗？更新后程序会自动重启，防护会回到待命状态，需要手动再开。`)) return;
+  if (text) text.textContent = `正在上传本地更新包 ${(file.size / 1048576).toFixed(1)} MB…`;
+  try {
+    const res = await fetch("/system/update/local", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/zip" },
+      body: file,
+    });
+    let data = {};
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok) throw new Error(data.error || `上传失败（HTTP ${res.status}）`);
+  } catch (e) {
+    if (text) text.textContent = `本地更新失败：${e.message}`;
+    toast(e.message, "err");
+    return;
+  }
+  if (text) text.textContent = "已开始替换文件…";
+  // 和自动更新一样轮询进度；进程重启后请求断开属于正常收尾
+  let stopped = false;
+  const timer = setInterval(async () => {
+    if (stopped) return;
+    try {
+      const st = await api("/system/update/status");
+      if (st.error) {
+        stopped = true;
+        clearInterval(timer);
+        if (text) text.textContent = `本地更新失败：${st.error}`;
+        toast(st.error, "err");
+        return;
+      }
+      if (st.message && text) text.textContent = st.message;
+      if (st.done) {
+        stopped = true;
+        clearInterval(timer);
+        if (text) text.textContent = "更新完成，程序正在重启…";
+      }
+    } catch (e) {
+      stopped = true;
+      clearInterval(timer);
+      if (text) text.textContent = "更新完成，程序正在重启…";
+    }
+  }, 700);
+}
+
 async function saveSettings() {  let port = parseInt($("setPort").value, 10);
   if (!port || port < 1 || port > 65535) {
     toast("端口应为 1-65535", "warn");
@@ -815,6 +874,10 @@ function bind() {
   if ($("btnCheckUpdate")) $("btnCheckUpdate").addEventListener("click", () => checkUpdate(true));
   if ($("btnOpenRelease")) $("btnOpenRelease").addEventListener("click", openReleasePage);
   if ($("btnApplyUpdate")) $("btnApplyUpdate").addEventListener("click", applyUpdate);
+  if ($("btnLocalUpdate")) $("btnLocalUpdate").addEventListener("click", pickLocalUpdate);
+  if ($("localPkg")) {
+    $("localPkg").addEventListener("change", (e) => localUpdate(e.target.files && e.target.files[0]));
+  }
   $("btnElevate").addEventListener("click", elevate);
   $("quitApp").addEventListener("click", quitApp);
   $("btnQuit2").addEventListener("click", quitApp);
