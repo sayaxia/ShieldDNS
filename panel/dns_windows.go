@@ -145,13 +145,25 @@ const (
 	ipAdapterDHCP    = 0x0004 // IP_ADAPTER_DHCP_ENABLED
 )
 
-// dnsInterfaceSettings 对应 DNS_INTERFACE_SETTINGS
+// dnsInterfaceSettings 对应 DNS_INTERFACE_SETTINGS（netioapi.h）。
+//
+// 关键点：Flags 是 ULONG64，不是 ULONG。写成 uint32 会让 Go 把它放在偏移 4，
+// 而 API 在偏移 8 读 8 字节 → 实际读到的是对齐填充（全 0）→ Flags=0 → 一个字段都不应用，
+// 但返回值仍是 0（成功）。这个坑的表现就是：接管"成功"、备份也写了，网卡 DNS 却纹丝不动。
+// 后面几个字段按官方声明补齐，即便当前只用到 NameServer，也让布局和系统完全一致。
 type dnsInterfaceSettings struct {
-	Version    uint32
-	Flags      uint32
-	Domain     *uint16
-	NameServer *uint16
-	SearchList *uint16
+	Version             uint32
+	_                   uint32 // 对齐填充，让 Flags 落在偏移 8
+	Flags               uint64
+	Domain              *uint16
+	NameServer          *uint16
+	SearchList          *uint16
+	RegistrationEnabled uint32
+	RegisterAdapterName uint32
+	EnableLLMNR         uint32
+	QueryAdapterName    uint32
+	_                   uint32 // 让 ProfileNameServer 落在偏移 64
+	ProfileNameServer   *uint16
 }
 
 // adapterInfo 是枚举出来的网卡：多了 GUID（写 DNS 必须用 GUID）和是否由 DHCP 下发
@@ -250,6 +262,43 @@ func setAdapterDNS(guid windows.GUID, servers []string) error {
 	return nil
 }
 
+// serversEqual 比较两个 DNS 列表（忽略顺序差异之外的空格/大小写）
+func serversEqual(a, b []string) bool {
+	clean := func(in []string) []string {
+		out := make([]string, 0, len(in))
+		for _, s := range in {
+			if t := strings.TrimSpace(s); t != "" {
+				out = append(out, strings.ToLower(t))
+			}
+		}
+		return out
+	}
+	ca, cb := clean(a), clean(b)
+	if len(ca) != len(cb) {
+		return false
+	}
+	for i := range ca {
+		if ca[i] != cb[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// adapterDNSNow 读回某块网卡当前的 IPv4 DNS（读不到就返回空，代表没有静态 DNS）
+func adapterDNSNow(guid windows.GUID) []string {
+	infos, err := enumAdapters()
+	if err != nil {
+		return nil
+	}
+	for _, a := range infos {
+		if a.GUID == guid {
+			return a.Addresses
+		}
+	}
+	return nil
+}
+
 // flushDNSCache 清解析缓存，避免改完 DNS 还在用旧记录
 func flushDNSCache() {
 	if err := procDnsFlushResolverCache.Find(); err == nil {
@@ -264,6 +313,25 @@ func backupPath() string {
 func IsTakenOver() bool {
 	_, err := os.Stat(backupPath())
 	return err == nil
+}
+
+// IsTakeoverEffective 才算"真的在接管"：备份在，而且确实有网卡指着 127.0.0.1。
+// 只看备份文件会踩坑：上一次还原失败的残留备份会让新一轮接管被跳过，
+// 界面上显示防护已开，实际网卡 DNS 还是路由器的，等于没防。
+func IsTakeoverEffective() bool {
+	if !IsTakenOver() {
+		return false
+	}
+	infos, err := enumAdapters()
+	if err != nil {
+		return true // 枚举失败时保守认为在接管，避免重复写入
+	}
+	for _, a := range infos {
+		if containsOwnDNS(a.Addresses) {
+			return true
+		}
+	}
+	return false
 }
 
 func ReadBackup() (*dnsBackup, error) {
@@ -435,19 +503,45 @@ func TakeoverDNS() error {
 	// 逐块网卡改成 127.0.0.1，成功的记进备份；失败的收集起来一起报，但不影响其它网卡
 	var rows []dnsAdapter
 	var failed []string
+	type pending struct {
+		row  dnsAdapter
+		guid windows.GUID
+	}
+	var written []pending
 	for _, a := range infos {
 		if err := setAdapterDNS(a.GUID, []string{"127.0.0.1"}); err != nil {
-			failed = append(failed, a.Alias)
+			failed = append(failed, fmt.Sprintf("%s（%v）", a.Alias, err))
 			continue
 		}
-		rows = append(rows, dnsAdapter{
-			Index:     a.Index,
-			Alias:     a.Alias,
-			Addresses: cleanOriginalDNS(a.Addresses),
-			DHCP:      a.DHCP,
+		written = append(written, pending{
+			row: dnsAdapter{
+				Index:     a.Index,
+				Alias:     a.Alias,
+				Addresses: cleanOriginalDNS(a.Addresses),
+				DHCP:      a.DHCP,
+			},
+			guid: a.GUID,
 		})
 	}
 	flushDNSCache()
+	// 读回校验：SetInterfaceDnsSettings 返回 0 并不代表生效（结构体布局差一个字段就会"成功但无变化"），
+	// 所以必须读回来确认真的是 127.0.0.1，否则这块网卡不能记进备份、也不能算接管成功。
+	if len(written) > 0 {
+		nowByIndex := make(map[int][]string, len(written))
+		if after, err := enumAdapters(); err == nil {
+			for _, a := range after {
+				nowByIndex[a.Index] = a.Addresses
+			}
+		}
+		for _, p := range written {
+			got := nowByIndex[p.row.Index]
+			if serversEqual(got, []string{"127.0.0.1"}) {
+				rows = append(rows, p.row)
+				continue
+			}
+			failed = append(failed, fmt.Sprintf("%s（写入未生效，当前为 %s）", p.row.Alias, strings.Join(got, ",")))
+		}
+	}
 	if len(rows) == 0 {
 		return fmt.Errorf("接管失败：%s", strings.Join(failed, "、"))
 	}
@@ -507,18 +601,22 @@ func ReleaseDNS() error {
 	}
 	flushDNSCache()
 
-	// 二次校验：还有指向 127.0.0.1 的，说明上面没写进去或又被别的实例写回，再清一次
+	// 二次校验：读回来还有指向 127.0.0.1 的，再清一次；清不掉就记为失败（备份随之保留）
 	if after, err := enumAdapters(); err == nil {
-		still := make(map[int]bool, len(failed))
+		want := make(map[int]string, len(b.Adapters))
 		for _, a := range b.Adapters {
-			still[a.Index] = true
+			want[a.Index] = a.Alias
 		}
 		for _, a := range after {
-			if !still[a.Index] || !containsOwnDNS(a.Addresses) {
+			if _, ok := want[a.Index]; !ok || !containsOwnDNS(a.Addresses) {
 				continue
 			}
 			if err := setAdapterDNS(a.GUID, nil); err != nil {
-				continue // 已在 failed 里记过，这里只做尽力补救
+				failed = append(failed, fmt.Sprintf("%s（补救清空失败：%v）", a.Alias, err))
+				continue
+			}
+			if still := adapterDNSNow(a.GUID); containsOwnDNS(still) {
+				failed = append(failed, fmt.Sprintf("%s（仍指向 127.0.0.1）", a.Alias))
 			}
 		}
 		flushDNSCache()

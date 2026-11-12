@@ -39,8 +39,15 @@ func main() {
 	watchdog := flag.Bool("watchdog", false, "看门狗模式：检查并在必要时还原系统 DNS（内部使用）")
 	helper := flag.Bool("helper", false, "后台助手模式：以 SYSTEM 常驻，提供免 UAC 的 DNS 接管通道（内部使用）")
 	dataDir := flag.String("data", "", "数据目录（看门狗/助手模式内部使用，计划任务以 SYSTEM 运行时必须指定）")
+	dnsTest := flag.Int("dns-selftest", 0, "诊断：在指定 InterfaceIndex 上测一遍「写 127.0.0.1 → 读回 → 恢复 DHCP → 读回」（内部使用，需要管理员）")
 	flag.Parse()
 	_ = showWindow
+
+	// DNS 写路径自检：SetInterfaceDnsSettings 返回 0 不代表生效，必须读回来才算数。
+	// 选一块没流量的网卡跑，结果写进数据目录下的 dns-selftest.log，一次提权即可验证。
+	if *dnsTest > 0 {
+		os.Exit(runDNSSelfTest(*dnsTest))
+	}
 
 	// 看门狗是无人值守的短命进程，不能碰托盘/窗口，也不该抢单实例互斥体
 	if *watchdog {

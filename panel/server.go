@@ -352,10 +352,13 @@ func (a *App) handleProtection(w http.ResponseWriter, r *http.Request) {
 	// 端口 53 就等同于"接管本机 DNS"，不再需要用户在界面上挑模式
 	if cfg.ListenPort == 53 && !req.Enabled && IsTakenOver() {
 		// 关防护就把网卡 DNS 还回去，避免"程序还开着但已不拦截，解析却还挂在 127.0.0.1 上"
-		_ = releaseSystemDNS()
+		if err := releaseSystemDNS(); err != nil {
+			panelLog("关闭防护时还原系统 DNS 失败：%v", err)
+		}
 	}
-	if cfg.ListenPort == 53 && req.Enabled && !IsTakenOver() {
-		// 已经接管过就不要再写一次，否则会把 127.0.0.1 当成原始 DNS 记进备份
+	if cfg.ListenPort == 53 && req.Enabled && !IsTakeoverEffective() {
+		// 已经接管过就不要再写一次，否则会把 127.0.0.1 当成原始 DNS 记进备份。
+		// 判定用 IsTakeoverEffective：只有残留备份、网卡其实没指向本机时必须重新接管。
 		if err := takeoverSystemDNS(); err != nil {
 			writeJSON(w, 500, map[string]any{"error": "防护已开，但接管系统 DNS 失败：" + err.Error(), "enabled": true})
 			return
@@ -460,7 +463,7 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 	// 端口是 53 且防护在开 → 自动接管，用户不需要再点任何东西
 	takeoverNote := ""
 	if cfg.ListenPort == 53 {
-		if st, err := a.fetchStatus(); err == nil && st.Protection && !IsTakenOver() {
+		if st, err := a.fetchStatus(); err == nil && st.Protection && !IsTakeoverEffective() {
 			if err := takeoverSystemDNS(); err != nil {
 				takeoverNote = "接管系统 DNS 失败：" + err.Error()
 			}
