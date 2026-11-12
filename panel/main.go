@@ -77,24 +77,12 @@ func main() {
 	}
 	acquireSingleInstance(wait)
 
-	// 覆盖正在运行的同名 exe 时，Windows 会把旧镜像改名成 "ShieldDNS.exe~" 留在旁边。
-	// 上一次遗留的文件只要当前没被占用就顺手删掉，避免 dist 里堆垃圾。
-	// 应用内自动更新还会把旧文件改成 .old 当回滚备份，重启后同样清掉。
+	// 覆盖正在运行的同名 exe 时，Windows 会把旧镜像改名成 "ShieldDNS.exe~" 留在旁边；
+	// 应用内自动更新还会把旧文件改成 .old-<时间戳> 当回滚备份。
+	// 这里清掉上一次的遗留（这次自己可能东占着旧镜像，删不掉就后台重试）。
 	if exe, err := os.Executable(); err == nil {
-		coreOld := filepath.Join(filepath.Dir(exe), "core", "shielddns-core.exe.old")
-		_ = os.Remove(exe + "~")
-		_ = os.Remove(exe + ".old")
-		_ = os.Remove(coreOld)
+		cleanupOldBinaries(exe)
 		_ = os.RemoveAll(filepath.Join(DataDir(), "update"))
-		// 刚更新完就重启时，旧进程可能还映射着 .old 里的镜像，这一次删不掉；
-		// 后台重试几次，别让回滚备份永久留在安装目录里
-		go func() {
-			for i := 0; i < 6; i++ {
-				time.Sleep(2 * time.Second)
-				_ = os.Remove(exe + ".old")
-				_ = os.Remove(coreOld)
-			}
-		}()
 	}
 
 	cfg := loadConfig()

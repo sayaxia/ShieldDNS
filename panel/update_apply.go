@@ -155,6 +155,16 @@ func applyUpdate(a *App, res updateResult) {
 	a.core.Stop()
 	time.Sleep(1200 * time.Millisecond)
 
+	// 更新会让面板先退出再重启，这中间 53 端口没人监听；
+	// 若系统 DNS 还指着 127.0.0.1，用户这段时间就是断网的。所以先把 DNS 还回去，
+	// 新面板起来后按用户操作重新接管（启动时本来就是待命状态）。
+	if IsTakeoverEffective() {
+		setUpdateStat("stop", 20, "还原系统 DNS")
+		if err := releaseSystemDNS(); err != nil {
+			panelLog("更新前还原系统 DNS 失败（继续更新）：%v", err)
+		}
+	}
+
 	setUpdateStat("replace", 40, "替换程序文件")
 	if err := replaceFile(newExe, exe); err != nil {
 		failUpdateStat(err, "替换主程序失败（可能没有写入权限，试试「以管理员身份重启」后再更新）："+err.Error())
@@ -165,6 +175,18 @@ func applyUpdate(a *App, res updateResult) {
 			failUpdateStat(err, "主程序已更新，但核心替换失败："+err.Error())
 			return
 		}
+	}
+
+	// 后台助手跑的是同一个 exe 的另一个进程：替换文件不受它影响（改名 + 写新文件即可），
+	// 但它还映射着旧镜像、占着旧镜像的句柄，而且代码是旧的。
+	// 这里把它停掉，等新面板启动时由 ensureHelperAlive 用新 exe 重新拉起。
+	if HelperTaskRegistered() {
+		_, _ = runHidden(sysExe("schtasks.exe"), "/End", "/TN", helperTaskName)
+		if !waitHelperStopped(1500 * time.Millisecond) {
+			stopHelperProcesses()
+			_ = waitHelperStopped(3 * time.Second)
+		}
+		panelLog("更新：已停止后台助手，待新面板启动后重新拉起")
 	}
 
 	setUpdateStat("restart", 100, "更新完成，正在重启")
@@ -350,19 +372,29 @@ func unzipTo(src, dst string) error {
 	return nil
 }
 
-// replaceFile 用 src 覆盖 dst：旧的先改名成 .old（正在运行的 exe 只能改名，不能删改），
-// 拷贝失败就把 .old 改回去，避免程序处于「新旧都没有」的状态。
+// replaceFile 用 src 覆盖 dst：旧的先改名成带时间戳的 .old（正在运行的 exe 只能改名，不能删改），
+// 拷贝失败就把备份改回去，避免程序处于「新旧都没有」的状态。
+//
+// 两点是被真实场景逼出来的：
+//  1. 备份名不能固定成 dst+".old"：后台助手是同一个 exe 的另一个进程，上一版的 .old 可能
+//     还被它开着，删不掉；用固定名的话第二次更新会在「先删旧备份」这一步直接失败。
+//  2. 改名本身也有偶发失败（杀软/索引正在扫这个文件），所以重试几次再报错。
 func replaceFile(src, dst string) error {
-	old := dst + ".old"
-	if _, err := os.Stat(old); err == nil {
-		if err := os.Remove(old); err != nil {
-			return fmt.Errorf("旧备份 %s 删不掉：%v", filepath.Base(old), err)
-		}
-	}
+	// 先把上一版遗留的备份清掉（删不掉的留给启动清理，不能阻塞更新）
+	cleanupOldBinaries(dst)
+
+	old := dst + ".old-" + time.Now().Format("20060102-150405")
 	renamed := false
 	if _, err := os.Stat(dst); err == nil {
-		if err := os.Rename(dst, old); err != nil {
-			return fmt.Errorf("旧文件改名失败：%v", err)
+		var renameErr error
+		for i := 0; i < 8; i++ {
+			if renameErr = os.Rename(dst, old); renameErr == nil {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if renameErr != nil {
+			return fmt.Errorf("旧文件改名失败：%w", renameErr)
 		}
 		renamed = true
 	}
@@ -374,6 +406,60 @@ func replaceFile(src, dst string) error {
 		return err
 	}
 	return nil
+}
+
+// cleanupOldBinaries 删除安装目录里上一版留下的 exe 备份（*.old / *.old-<时间戳> / *~）。
+// 当前进程或后台助手可能还映射着这些镜像，删不掉就后台重试几轮，绝不阻塞更新。
+func cleanupOldBinaries(path string) {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	d := struct{ dir, prefix string }{dir, base}
+	coreDir := filepath.Join(filepath.Dir(path), "core")
+	dirs := []struct{ dir, prefix string }{
+		{d.dir, d.prefix + ".old"},
+		{d.dir, d.prefix + "~"},
+		{coreDir, "shielddns-core.exe.old"},
+		{coreDir, "shielddns-core.exe~"},
+	}
+	removeMatching := func(t struct{ dir, prefix string }) []string {
+		var left []string
+		entries, err := os.ReadDir(t.dir)
+		if err != nil {
+			return nil
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasPrefix(e.Name(), t.prefix) {
+				continue
+			}
+			full := filepath.Join(t.dir, e.Name())
+			if err := os.Remove(full); err != nil {
+				left = append(left, full)
+			}
+		}
+		return left
+	}
+	var leftovers []string
+	for _, t := range dirs {
+		leftovers = append(leftovers, removeMatching(t)...)
+	}
+	if len(leftovers) == 0 {
+		return
+	}
+	go func() {
+		for i := 0; i < 6; i++ {
+			time.Sleep(2 * time.Second)
+			kept := leftovers[:0]
+			for _, p := range leftovers {
+				if err := os.Remove(p); err != nil {
+					kept = append(kept, p)
+				}
+			}
+			leftovers = kept
+			if len(leftovers) == 0 {
+				return
+			}
+		}
+	}()
 }
 
 func copyFile(src, dst string) error {
