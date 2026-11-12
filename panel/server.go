@@ -651,9 +651,21 @@ func (a *App) quit() {
 		time.Sleep(2500 * time.Millisecond)
 		os.Exit(0)
 	}()
-	// 正常退出时把网卡 DNS 还回去，否则核心一停就整机没有 DNS
+	// 正常退出时把网卡 DNS 还回去，否则核心一停就整机没有 DNS。
+	// 结果必须写日志：之前这里只 _ = 丢掉错误，出事时无从判断到底是没还原还是还原失败。
 	if cfg := loadConfig(); cfg.DNSMode == "system" && IsTakenOver() {
-		_ = releaseSystemDNS()
+		if err := releaseSystemDNS(); err != nil {
+			panelLog("退出时还原系统 DNS 失败：%v", err)
+			// 再试一次：这次失败往往是网卡刚好在切换状态
+			time.Sleep(600 * time.Millisecond)
+			if err := releaseSystemDNS(); err != nil {
+				panelLog("二次还原系统 DNS 仍失败：%v（备份已保留，下次启动会自动重试）", err)
+			} else {
+				panelLog("二次还原系统 DNS 成功")
+			}
+		} else {
+			panelLog("退出时已还原系统 DNS")
+		}
 	}
 	a.core.Stop()
 	if a.tray != nil {

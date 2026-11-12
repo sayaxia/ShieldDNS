@@ -25,6 +25,9 @@ type dnsAdapter struct {
 	Index     int      `json:"index"`
 	Alias     string   `json:"alias"`
 	Addresses []string `json:"addresses"`
+	// DHCP 为真时，还原走"清空 → 让 DHCP 重新下发"，而不是把地址写成静态；
+	// 老备份没有这个字段，按 false 兼容。
+	DHCP bool `json:"dhcp,omitempty"`
 }
 
 type dnsBackup struct {
@@ -402,6 +405,21 @@ func applySystemUpstreams(cfg *Config) ([]string, string, error) {
 	return list, src, nil
 }
 
+// cleanOriginalDNS 过滤掉"指向本机"的地址。
+// 上一次接管没还原成功时，枚举出来的"原值"就是 127.0.0.1——把它当原值写进备份，
+// 还原时就会把网卡写回一个没人监听的死地址，整机解析直接断掉。
+// 这类值一律视为"没有原值"，还原时走 DHCP。
+func cleanOriginalDNS(addrs []string) []string {
+	var out []string
+	for _, a := range addrs {
+		if isOwnDNS(a) {
+			continue
+		}
+		out = append(out, strings.TrimSpace(a))
+	}
+	return out
+}
+
 // TakeoverDNS 把所有已配置 DNS 的 IPv4 网卡指向 127.0.0.1，并记录原值以便还原
 func TakeoverDNS() error {
 	if !IsAdmin() {
@@ -422,7 +440,12 @@ func TakeoverDNS() error {
 			failed = append(failed, a.Alias)
 			continue
 		}
-		rows = append(rows, dnsAdapter{Index: a.Index, Alias: a.Alias, Addresses: a.Addresses})
+		rows = append(rows, dnsAdapter{
+			Index:     a.Index,
+			Alias:     a.Alias,
+			Addresses: cleanOriginalDNS(a.Addresses),
+			DHCP:      a.DHCP,
+		})
 	}
 	flushDNSCache()
 	if len(rows) == 0 {
@@ -442,7 +465,12 @@ func TakeoverDNS() error {
 	return nil
 }
 
-// ReleaseDNS 还原接管前的系统 DNS 设置
+// ReleaseDNS 还原接管前的系统 DNS 设置。
+//
+// 三条硬性要求（都是被真实事故教出来的）：
+//  1. 原值本身是 127.0.0.1 的（老版本备份里可能有），一律按"没有原值"处理，走 DHCP，不能写回死地址；
+//  2. 还原完要看一眼结果，仍有网卡指着 127.0.0.1 就再清一次；
+//  3. 只要有一块没还原成功，备份文件必须留着，否则程序再也不知道原值是什么，只能人工救。
 func ReleaseDNS() error {
 	if !IsAdmin() {
 		return errors.New("需要管理员权限才能还原系统 DNS")
@@ -468,16 +496,49 @@ func ReleaseDNS() error {
 			failed = append(failed, a.Alias+"（网卡已不存在）")
 			continue
 		}
-		// 原值为空说明本来就是 DHCP 下发的，清空即回到 DHCP
-		if err := setAdapterDNS(guid, a.Addresses); err != nil {
-			failed = append(failed, a.Alias)
+		// DHCP 下发的、或原值为空/环回的 → 清空让 DHCP 重新下发
+		var servers []string
+		if !a.DHCP {
+			servers = cleanOriginalDNS(a.Addresses)
+		}
+		if err := setAdapterDNS(guid, servers); err != nil {
+			failed = append(failed, fmt.Sprintf("%s（%v）", a.Alias, err))
 		}
 	}
 	flushDNSCache()
-	if len(failed) == len(b.Adapters) {
-		return fmt.Errorf("还原失败：%s", strings.Join(failed, "、"))
+
+	// 二次校验：还有指向 127.0.0.1 的，说明上面没写进去或又被别的实例写回，再清一次
+	if after, err := enumAdapters(); err == nil {
+		still := make(map[int]bool, len(failed))
+		for _, a := range b.Adapters {
+			still[a.Index] = true
+		}
+		for _, a := range after {
+			if !still[a.Index] || !containsOwnDNS(a.Addresses) {
+				continue
+			}
+			if err := setAdapterDNS(a.GUID, nil); err != nil {
+				continue // 已在 failed 里记过，这里只做尽力补救
+			}
+		}
+		flushDNSCache()
+	}
+
+	if len(failed) > 0 {
+		// 保留备份，下次开程序还能再还原一次
+		return fmt.Errorf("还原未完成：%s", strings.Join(failed, "、"))
 	}
 	return os.Remove(backupPath())
+}
+
+// containsOwnDNS 地址列表里有没有指向本机的死地址
+func containsOwnDNS(addrs []string) bool {
+	for _, a := range addrs {
+		if isOwnDNS(a) {
+			return true
+		}
+	}
+	return false
 }
 
 // Elevate 以管理员身份重新启动自身

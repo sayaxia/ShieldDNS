@@ -101,10 +101,17 @@ func main() {
 		_ = saveConfig(cfg)
 	}
 	if IsTakenOver() {
+		// 上次退出时没还原成功（备份会被保留）→ 启动时补做一次，别让机器带着 127.0.0.1 的死 DNS 跑
+		var relErr error
 		if IsAdmin() {
-			_ = ReleaseDNS()
+			relErr = ReleaseDNS()
 		} else if HelperRunning() {
-			_, _ = helperCall("release", 5*time.Second)
+			_, relErr = helperCall("release", 5*time.Second)
+		}
+		if relErr != nil {
+			panelLog("启动时补还原系统 DNS 失败：%v（备份已保留，稍后可再试）", relErr)
+		} else {
+			panelLog("启动时补还原系统 DNS 完成")
 		}
 	}
 	// 跟随本机 DNS：启动核心之前先把本机网卡 DNS 抓成上游
