@@ -3,6 +3,8 @@ dist/
 panel/dist/
 core/target/
 panel/app.syso
+# go build ./... 会在源码目录留下同名 exe，别被 git add -A 带进去
+panel/*.exe
 
 # 本地打包验证目录（不随仓库提交）
 out/
