@@ -67,7 +67,7 @@ ShieldDNS/
 │  ├─ watchdog.go             看门狗逻辑：探测真实应答 → 必要时还原 → 顺手重启助手
 │  ├─ tray_windows.go         纯 syscall 托盘（NOTIFYICONDATAW + 弹出菜单）
 │  ├─ window_windows.go       WebView2 窗口 + WndProc 子类化（关窗即收托盘）
-│  ├─ dns_windows.go          管理员检测、PowerShell 执行、网卡 DNS 接管/还原、上游抓取
+│  ├─ dns_windows.go          管理员检测、网卡 DNS 接管/还原（原生 iphlpapi，无子进程）、上游抓取
 │  ├─ app.rc / app.manifest   图标资源与 PerMonitorV2 DPI 清单 → 编译成 app.syso
 │  ├─ vendor/                 Go 依赖（离线可编译）
 │  ├─ web/                    内嵌单页 UI（index.html / style.css / app.js / assets）
@@ -343,7 +343,7 @@ WebView2 的两个行为在原库上做不到，因此直接改了 `panel\vendor
 * 计划任务 `ShieldDNS-DNS-Helper`，`SYSTEM` 身份，`ExecutionTimeLimit=PT0S`（不限制时长，常驻）。触发器有两个：`BootTrigger` 开机 5 秒后启动；`LogonTrigger` 登录 8 秒后启动，并挂 **30 分钟重复**——助手被杀掉或异常退出后任务回到 Ready，下一轮重复会把它重新拉起，普通权限用户不必为"重启助手"去提权。
 * 动作 `<exe> -helper -data "<数据目录>"`（同样因为 SYSTEM 的 `%LOCALAPPDATA%` 是 `systemprofile`）。
 * 助手在命名管道 `\\.\pipe\ShieldDNS-DNS-Helper` 上服务，**管道 ACL 只放行 SYSTEM、Administrators 和安装时的那个用户 SID**（SID 写在 `helper_user.sid`），其它账户连不上。
-* 协议只有四个动作：`ping` / `status` / `takeover` / `release`。收到请求后用同一个 PowerShell 实现去写/还原网卡 DNS，成功即回 `{"ok":true}`。
+* 协议只有四个动作：`ping` / `status` / `takeover` / `release`。收到请求后写/还原网卡 DNS，成功即回 `{"ok":true}`。写 DNS 用的是原生 `iphlpapi!SetInterfaceDnsSettings`，不拉 PowerShell、不拉 netsh——早先那版是起 `powershell.exe -ExecutionPolicy Bypass -Command` 跑 `Set-DnsClientServerAddress`，会被安全软件的「系统加固 · 利用 PowerShell 执行可疑脚本」拦下来（一个开机就自启的程序去拉带 Bypass 的 PowerShell，报警是对的）。
 * 面板调用顺序：自己是管理员就直接干；否则先试助手。都不行才返回「需要管理员权限：请安装后台助手或提权重启」。
 * 安装（设置页「后台助手」→ 安装后台助手）需要一次 UAC；装完立刻 `schtasks /Run` 拉起并 `ping` 校验，之后开机/登录自启、随用随连**全程零弹窗**。卸载同理只需一次提权。
 * 日志写在 `logs\helper.log`（每次动作一行，含 ok/错误/detail）；面板自己的启动自愈记录写在 `logs\panel.log`。

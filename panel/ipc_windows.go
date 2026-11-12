@@ -55,21 +55,10 @@ func helperSIDPath() string {
 	return filepath.Join(DataDir(), "helper_user.sid")
 }
 
-// CurrentUserSID 取当前登录用户的 SID（形如 S-1-5-21-...），用于给管道 ACL 授最小权限
+// CurrentUserSID 取当前登录用户的 SID（形如 S-1-5-21-...），用于给管道 ACL 授最小权限。
+// 直接读令牌，不起 whoami（whoami 是子进程，安全软件会盯着看）
 func CurrentUserSID() string {
-	out, err := runHidden(sysExe("whoami.exe"), "/user", "/fo", "csv", "/nh")
-	if err != nil {
-		return ""
-	}
-	line := strings.TrimSpace(out)
-	parts := strings.Split(line, ",")
-	for _, p := range parts {
-		v := strings.Trim(strings.TrimSpace(p), `"`)
-		if strings.HasPrefix(v, "S-1-5-") {
-			return v
-		}
-	}
-	return ""
+	return currentTokenSID()
 }
 
 func helperLog(format string, args ...any) {

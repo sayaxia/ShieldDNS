@@ -1,15 +1,12 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -61,47 +58,200 @@ func IsAdmin() bool {
 	return r != 0 && info.TokenIsElevated != 0
 }
 
-// IsAdminCapable 账号是否属于 Administrators 组（可能只是没提权）。
-// whoami /groups 里会带 deny-only 标记，正好能区分"标准用户"和"管理员但未提权"。
-func IsAdminCapable() bool {
-	out, err := runHidden(sysExe("whoami.exe"), "/groups")
+// tokenHasGroup 判断当前进程令牌里是否含某个组 SID。
+// deny-only 的组也算在内，所以能区分「标准用户」和「管理员但没提权」。
+func tokenHasGroup(sidText string) bool {
+	target, err := windows.StringToSid(sidText)
 	if err != nil {
 		return false
 	}
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "S-1-5-32-544") {
+	var n uint32
+	tok := windows.GetCurrentProcessToken()
+	if err := windows.GetTokenInformation(tok, windows.TokenGroups, nil, 0, &n); err != nil &&
+		!errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) {
+		return false
+	}
+	if n == 0 {
+		return false
+	}
+	buf := make([]byte, n)
+	if err := windows.GetTokenInformation(tok, windows.TokenGroups, &buf[0], n, &n); err != nil {
+		return false
+	}
+	groups := (*windows.Tokengroups)(unsafe.Pointer(&buf[0]))
+	want := target.String()
+	for _, g := range groups.AllGroups() {
+		if g.Sid != nil && g.Sid.String() == want {
 			return true
 		}
 	}
 	return false
 }
 
-func runPowerShell(script string) (string, error) {
-	// 必须用绝对路径：面板被裁剪过 PATH 的父进程拉起时，裸 powershell.exe 会直接找不到，
-	// 结果就是"读本机 DNS 永远为空"这种静默失败。
-	ps := sysExe(`WindowsPowerShell\v1.0\powershell.exe`)
-	cmd := exec.Command(ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", errors.New(msg)
+// currentTokenSID 返回当前进程令牌里的用户 SID（形如 S-1-5-21-...）
+func currentTokenSID() string {
+	var n uint32
+	tok := windows.GetCurrentProcessToken()
+	if err := windows.GetTokenInformation(tok, windows.TokenUser, nil, 0, &n); err != nil &&
+		!errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) {
+		return ""
 	}
-	return strings.TrimSpace(string(out)), nil
+	if n == 0 {
+		return ""
+	}
+	buf := make([]byte, n)
+	if err := windows.GetTokenInformation(tok, windows.TokenUser, &buf[0], n, &n); err != nil {
+		return ""
+	}
+	tu := (*windows.Tokenuser)(unsafe.Pointer(&buf[0]))
+	if tu.User.Sid == nil {
+		return ""
+	}
+	return tu.User.Sid.String()
 }
 
-// 兜底：脚本一律以 base64(UTF-8 JSON) 输出，绕开控制台代码页
-func decodeB64(out string) (string, error) {
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	last := strings.TrimSpace(lines[len(lines)-1])
-	data, err := base64.StdEncoding.DecodeString(last)
-	if err != nil {
-		return "", err
+// IsAdminCapable 账号是否属于 Administrators 组（可能只是没提权）
+func IsAdminCapable() bool {
+	return tokenHasGroup("S-1-5-32-544")
+}
+
+// ---- 网卡 DNS：全部走 Win32 原生接口，不起任何子进程 ----
+//
+// 早先用 powershell.exe 跑 Get-DnsClientServerAddress / Set-DnsClientServerAddress，
+// 好处是省事，坏处是被安全软件的「系统加固·利用 PowerShell 执行可疑脚本」当成可疑行为拦截
+// （程序一开机就拉一个带 -ExecutionPolicy Bypass 的 PowerShell，看着确实像脚本投毒）。
+// 现在换成 iphlpapi 的原生实现：枚举用 GetAdaptersAddresses，写 DNS 用 SetInterfaceDnsSettings
+// （netsh 和 DnsClient 模块内部也是这一套），刷缓存用 dnsapi 的 DnsFlushResolverCache。
+// 顺带解决两个老毛病：不再依赖 PATH、不再有控制台代码页问题、也不再需要 base64 传 JSON。
+
+var (
+	modIphlpapi = windows.NewLazySystemDLL("iphlpapi.dll")
+	modDnsapi   = windows.NewLazySystemDLL("dnsapi.dll")
+	// SetInterfaceDnsSettings 是 Windows 10 1809 起提供的；更老的系统会找不到导出
+	procSetInterfaceDnsSettings = modIphlpapi.NewProc("SetInterfaceDnsSettings")
+	procDnsFlushResolverCache   = modDnsapi.NewProc("DnsFlushResolverCache")
+)
+
+const (
+	dnsSettingsVersion1  = 1
+	dnsSettingNameServer = 0x0002 // DNS_SETTING_NAMESERVER
+
+	gAAFamilyIPv4    = 2      // AF_INET
+	gAASkipAnycast   = 0x0002 // GAA_FLAG_SKIP_ANYCAST
+	gAASkipMulticast = 0x0004 // GAA_FLAG_SKIP_MULTICAST
+	ipAdapterDHCP    = 0x0004 // IP_ADAPTER_DHCP_ENABLED
+)
+
+// dnsInterfaceSettings 对应 DNS_INTERFACE_SETTINGS
+type dnsInterfaceSettings struct {
+	Version    uint32
+	Flags      uint32
+	Domain     *uint16
+	NameServer *uint16
+	SearchList *uint16
+}
+
+// adapterInfo 是枚举出来的网卡：多了 GUID（写 DNS 必须用 GUID）和是否由 DHCP 下发
+type adapterInfo struct {
+	Index     int
+	Alias     string
+	GUID      windows.GUID
+	Addresses []string
+	DHCP      bool
+}
+
+// enumAdapters 列出所有已配置 IPv4 DNS 的网卡（等价于 Get-DnsClientServerAddress -AddressFamily IPv4 过滤空值）
+func enumAdapters() ([]adapterInfo, error) {
+	var size uint32
+	// 第一次传空指针只拿大小，返回 ERROR_BUFFER_OVERFLOW 属正常
+	err := windows.GetAdaptersAddresses(gAAFamilyIPv4, gAASkipAnycast|gAASkipMulticast, 0, nil, &size)
+	if err != nil && !errors.Is(err, windows.ERROR_BUFFER_OVERFLOW) {
+		return nil, err
 	}
-	return string(data), nil
+	if size == 0 {
+		return nil, errors.New("枚举网卡失败：系统返回了空缓冲区")
+	}
+	// 多给一倍余量：网卡可能在两次调用之间增减
+	buf := make([]byte, size*2)
+	head := (*windows.IpAdapterAddresses)(unsafe.Pointer(&buf[0]))
+	size = uint32(len(buf))
+	if err := windows.GetAdaptersAddresses(gAAFamilyIPv4, gAASkipAnycast|gAASkipMulticast, 0, head, &size); err != nil {
+		return nil, err
+	}
+
+	var out []adapterInfo
+	for aa := head; aa != nil; aa = aa.Next {
+		var addrs []string
+		for d := aa.FirstDnsServerAddress; d != nil; d = d.Next {
+			ip := d.Address.IP()
+			if ip == nil {
+				continue
+			}
+			if v4 := ip.To4(); v4 != nil {
+				addrs = append(addrs, v4.String())
+			}
+		}
+		if len(addrs) == 0 {
+			continue
+		}
+		name := ""
+		if aa.FriendlyName != nil {
+			name = windows.UTF16PtrToString(aa.FriendlyName)
+		}
+		if name == "" {
+			name = fmt.Sprintf("网卡 %d", aa.IfIndex)
+		}
+		guidStr := ""
+		if aa.AdapterName != nil {
+			guidStr = windows.BytePtrToString(aa.AdapterName)
+		}
+		// AdapterName 就是 "{GUID}" 形式；GUIDFromString 底层是 CLSIDFromString，
+		// 必须连大括号一起传，剥掉就解析失败（"Invalid class string"）。
+		guid, err := windows.GUIDFromString(guidStr)
+		if err != nil {
+			continue // 拿不到 GUID 就没法写 DNS，跳过
+		}
+		out = append(out, adapterInfo{
+			Index:     int(aa.IfIndex),
+			Alias:     name,
+			GUID:      guid,
+			Addresses: addrs,
+			DHCP:      aa.Flags&ipAdapterDHCP != 0,
+		})
+	}
+	return out, nil
+}
+
+// setAdapterDNS 把某块网卡的 IPv4 DNS 设成 servers；传空切片等于清空（回到 DHCP 下发的 DNS）
+func setAdapterDNS(guid windows.GUID, servers []string) error {
+	if err := procSetInterfaceDnsSettings.Find(); err != nil {
+		return errors.New("当前系统不支持原生设置网卡 DNS（需要 Windows 10 1809 及以上）")
+	}
+	ns, err := windows.UTF16PtrFromString(strings.Join(servers, ","))
+	if err != nil {
+		return err
+	}
+	s := dnsInterfaceSettings{
+		Version:    dnsSettingsVersion1,
+		Flags:      dnsSettingNameServer,
+		NameServer: ns,
+	}
+	// GUID 是 16 字节结构体，x64 下按指针传参
+	r, _, _ := procSetInterfaceDnsSettings.Call(
+		uintptr(unsafe.Pointer(&guid)),
+		uintptr(unsafe.Pointer(&s)),
+	)
+	if r != 0 {
+		return fmt.Errorf("设置网卡 DNS 失败（错误码 %d）", r)
+	}
+	return nil
+}
+
+// flushDNSCache 清解析缓存，避免改完 DNS 还在用旧记录
+func flushDNSCache() {
+	if err := procDnsFlushResolverCache.Find(); err == nil {
+		procDnsFlushResolverCache.Call()
+	}
 }
 
 func backupPath() string {
@@ -126,29 +276,15 @@ func ReadBackup() (*dnsBackup, error) {
 }
 
 func ListAdapters() []dnsAdapter {
-	script := `
-$ErrorActionPreference='Stop'
-$rows = Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses -and $_.ServerAddresses.Count -gt 0 } | ForEach-Object {
-  [pscustomobject]@{ index=$_.InterfaceIndex; alias=$_.InterfaceAlias; addresses=@($_.ServerAddresses) }
-}
-$json = ConvertTo-Json -InputObject @{ adapters = @($rows) } -Compress -Depth 4
-[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
-`
-	out, err := runPowerShell(script)
+	infos, err := enumAdapters()
 	if err != nil {
 		return nil
 	}
-	text, err := decodeB64(out)
-	if err != nil {
-		return nil
+	out := make([]dnsAdapter, 0, len(infos))
+	for _, a := range infos {
+		out = append(out, dnsAdapter{Index: a.Index, Alias: a.Alias, Addresses: a.Addresses})
 	}
-	var payload struct {
-		Adapters []dnsAdapter `json:"adapters"`
-	}
-	if err := json.Unmarshal([]byte(text), &payload); err != nil {
-		return nil
-	}
-	return payload.Adapters
+	return out
 }
 
 // ---- 上游跟随系统 DNS ----
@@ -271,43 +407,39 @@ func TakeoverDNS() error {
 	if !IsAdmin() {
 		return errors.New("需要管理员权限才能接管系统 DNS")
 	}
-	script := `
-$ErrorActionPreference='Stop'
-$rows = @()
-Get-DnsClientServerAddress -AddressFamily IPv4 | ForEach-Object {
-  $addrs = @($_.ServerAddresses | Where-Object { $_ -and $_.Trim() -ne '' })
-  if ($addrs.Count -gt 0) {
-    $rows += [pscustomobject]@{ index=$_.InterfaceIndex; alias=$_.InterfaceAlias; addresses=$addrs }
-    Set-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -ServerAddresses @('127.0.0.1') -ErrorAction Stop
-  }
-}
-Clear-DnsClientCache
-$json = ConvertTo-Json -InputObject @{ adapters = @($rows) } -Compress -Depth 4
-[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
-`
-	out, err := runPowerShell(script)
+	infos, err := enumAdapters()
 	if err != nil {
-		return err
+		return fmt.Errorf("枚举网卡失败：%w", err)
 	}
-	text, err := decodeB64(out)
-	if err != nil {
-		return errors.New("解析网卡信息失败")
-	}
-	var payload struct {
-		Adapters []dnsAdapter `json:"adapters"`
-	}
-	if err := json.Unmarshal([]byte(text), &payload); err != nil {
-		return errors.New("解析网卡信息失败")
-	}
-	if len(payload.Adapters) == 0 {
+	if len(infos) == 0 {
 		return errors.New("没有找到已配置 DNS 的 IPv4 网卡")
+	}
+	// 逐块网卡改成 127.0.0.1，成功的记进备份；失败的收集起来一起报，但不影响其它网卡
+	var rows []dnsAdapter
+	var failed []string
+	for _, a := range infos {
+		if err := setAdapterDNS(a.GUID, []string{"127.0.0.1"}); err != nil {
+			failed = append(failed, a.Alias)
+			continue
+		}
+		rows = append(rows, dnsAdapter{Index: a.Index, Alias: a.Alias, Addresses: a.Addresses})
+	}
+	flushDNSCache()
+	if len(rows) == 0 {
+		return fmt.Errorf("接管失败：%s", strings.Join(failed, "、"))
 	}
 	b := dnsBackup{
 		TakenOverAt: time.Now().Format("2006-01-02 15:04:05"),
-		Adapters:    payload.Adapters,
+		Adapters:    rows,
 	}
 	data, _ := json.MarshalIndent(b, "", "  ")
-	return os.WriteFile(backupPath(), data, 0o644)
+	if err := os.WriteFile(backupPath(), data, 0o644); err != nil {
+		return fmt.Errorf("写入接管记录失败：%w", err)
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("部分网卡接管失败：%s", strings.Join(failed, "、"))
+	}
+	return nil
 }
 
 // ReleaseDNS 还原接管前的系统 DNS 设置
@@ -323,21 +455,27 @@ func ReleaseDNS() error {
 		_ = os.Remove(backupPath())
 		return nil
 	}
-	path := strings.ReplaceAll(backupPath(), "'", "''")
-	script := fmt.Sprintf(`
-$ErrorActionPreference='Stop'
-$b = Get-Content -LiteralPath '%s' -Raw -Encoding UTF8 | ConvertFrom-Json
-foreach ($a in $b.adapters) {
-  if ($a.addresses -and @($a.addresses).Count -gt 0) {
-    Set-DnsClientServerAddress -InterfaceIndex $a.index -ServerAddresses @($a.addresses) -ErrorAction Stop
-  } else {
-    Set-DnsClientServerAddress -InterfaceIndex $a.index -ResetServerAddresses -ErrorAction Stop
-  }
-}
-Clear-DnsClientCache
-`, path)
-	if _, err := runPowerShell(script); err != nil {
-		return err
+	// 备份里只存了 InterfaceIndex，写 DNS 要 GUID，所以现枚举一次做映射
+	infos, _ := enumAdapters()
+	byIndex := make(map[int]windows.GUID, len(infos))
+	for _, a := range infos {
+		byIndex[a.Index] = a.GUID
+	}
+	var failed []string
+	for _, a := range b.Adapters {
+		guid, ok := byIndex[a.Index]
+		if !ok {
+			failed = append(failed, a.Alias+"（网卡已不存在）")
+			continue
+		}
+		// 原值为空说明本来就是 DHCP 下发的，清空即回到 DHCP
+		if err := setAdapterDNS(guid, a.Addresses); err != nil {
+			failed = append(failed, a.Alias)
+		}
+	}
+	flushDNSCache()
+	if len(failed) == len(b.Adapters) {
+		return fmt.Errorf("还原失败：%s", strings.Join(failed, "、"))
 	}
 	return os.Remove(backupPath())
 }
