@@ -239,7 +239,7 @@ WebView2 的两个行为在原库上做不到，因此直接改了 `panel\vendor
 
 ### 版本号与检查更新
 
-* 版本号只有一个来源：`panel/version.go` 里的 `appVersion`（当前 `0.1.0`）。界面右上角 chip、设置页「版本」行、`/system/info` 都读它；核心侧 `Cargo.toml` 的版本同步即可。
+* 版本号只有一个来源：`panel/version.go` 里的 `appVersion`（当前 `1.0.3`）。界面右上角 chip、设置页「版本」行、`/system/info` 都读它；核心侧 `Cargo.toml` 的版本同步即可。
 * 「检查更新」走 `GET /system/update`：请求 `https://api.github.com/repos/sayaxia/ShieldDNS/releases/latest`，比对 tag（如 `v0.1.2`）与本地版本，按数字分段比较（`0.1.1` vs `0.1.2`、`0.10.0` 都能正确排序）。
 * 结果里带 `releaseURL`、`downloadURL`（优先 `*win-x64*.zip` 资产）与资产体积；有新版时界面放出「立即更新」和「发布页」两个按钮。
 * **应用内自动更新**：`POST /system/update/apply` 让面板自己下载 Release 压缩包、解压校验后替换 `ShieldDNS.exe` 与 `core\shielddns-core.exe`，然后拉起新实例并退出当前进程，用户不用去浏览器下载解压。
@@ -547,6 +547,31 @@ python scripts\verify_core.py 53 5399
 ---
 
 ## 16. 版本记录
+
+### 1.0.3
+
+**DNS 接管真的生效 + 退出/更新不再断网 + 去 PowerShell**
+
+* 接管不生效的根因是结构体布局：`DNS_INTERFACE_SETTINGS` 的 `Flags` 是 `ULONG64`，之前写成 `uint32`，Go 放在偏移 4、API 在偏移 8 读 8 字节，只读到对齐填充（全 0），`Flags=0` 时一个字段都不应用，返回值却是 0。结构体按官方字段补齐后接管恢复正常；`TakeoverDNS` 改成写完读回校验，不生效就报错且不写备份。
+* 还原安全：过滤环回地址（原值是 `127.0.0.1` 就按「没有原值」走 DHCP），部分网卡还原失败时保留备份，`quit()` 与关防护都会记录还原结果，避免「退出后 DNS 没还原、网断了」。
+* 新增 `IsTakeoverEffective()`（备份存在且确实有网卡指向 `127.0.0.1` 才算在接管），避免残留备份把新一轮接管挡掉。
+* 去掉 PowerShell：枚举网卡改用 `iphlpapi!GetAdaptersAddresses`，写 DNS 改用 `SetInterfaceDnsSettings`，刷缓存用 `DnsFlushResolverCache`，身份判断走 `GetTokenInformation`。之前看门狗调 PowerShell 还原 DNS 会被安全软件的「利用 PowerShell 执行可疑脚本」拦掉并杀进程，这条路已经不存在。
+* 新增隐藏诊断 `--dns-selftest <Index>`：一次提权完成「写 127.0.0.1 → 读回 → 回 DHCP → 读回」，日志写 `%LOCALAPPDATA%\ShieldDNS\dns-selftest.log`。
+
+**更新抗占用**
+
+* `replaceFile` 的备份名改成 `ShieldDNS.exe.old-<时间戳>` 并给改名加重试：后台助手是同一个 exe 的另一个进程，上一版的固定名 `.old` 可能还被它开着、删不掉，第二次更新会卡在「先删旧备份」。实测运行中的 exe 可以改名、可以在原路径写新文件，但被映射的 `.old` 删除会报 Access denied。
+* 新增 `cleanupOldBinaries`：按前缀清理 `.old` / `.old-<时间戳>` / `~`（含 core），删不掉的后台重试 6 轮，不阻塞更新。
+* 更新前若处于接管状态先还原系统 DNS（避免面板退出到新面板接管之间 53 无人监听导致断网）；替换完成后停掉后台助手，由新面板启动时用新 exe 重新拉起。
+
+**离线更新**
+
+* 新增应用内「从本地更新包更新」（`POST /system/update/local`，请求体就是 Release 的 zip 字节，上限 200 MB），安装步骤与自动更新共用 `installStaged`。
+* 发布包内附 `update.cmd`：给「GitHub 打不开、只能手动下载」的用户，右键管理员运行即可（`taskkill` 面板与 SYSTEM 助手 → 改名备份 → 复制 → 启动），批处理不依赖 PowerShell，不会触发安全软件的脚本拦截。
+
+**发布**
+
+* 版本号 1.0.3（三处同步），Release 资产 `ShieldDNS-1.0.3-win-x64.zip`（含 `update.cmd`）。
 
 ### 1.0.2
 
